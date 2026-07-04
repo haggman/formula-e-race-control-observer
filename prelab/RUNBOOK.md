@@ -36,12 +36,15 @@ Put the 24 camera IDs in **track order** (from Step 1) into
 python prelab/normalize_cameras.py --order prelab/camera_order.txt
 ```
 
-This reads each block directly from the bucket over HTTPS with ffmpeg range seeks
-(gs://class-demo is public-read), so it only transfers the needed 1 FPS segments
-— **no 120 GB of downloads, no Cloud Shell disk pressure**. Add `--auth` to use
-signed URLs if your bucket isn't public. It writes `cam_xx_1fps.mp4` per camera
-**and** auto-emits `notebooks/camera_groups.full.json` (consecutive fours → 2×2
-groups, offset 0, start_utc = race start).
+This reads each block over **authenticated HTTPS** (a bearer token from
+`gcloud auth print-access-token`) with ffmpeg range seeks, so it only transfers
+the needed 1 FPS segments — **no 120 GB of downloads, no Cloud Shell disk
+pressure**. Run it where gcloud is authed with read on the bucket (the class-demo
+owning project). If range reads misbehave, add `--download` to copy each block
+locally first (robust; ~1.7 GB transient per block, deleted right after). It
+writes `cam_xx_1fps.mp4` per camera **and** auto-emits
+`notebooks/camera_groups.full.json` (consecutive fours → 2×2 groups, offset 0,
+start_utc = race start).
 
 ## Step 3 — Generate the mosaics
 

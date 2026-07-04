@@ -6,10 +6,12 @@ times, so we can't just point the mosaic builder at raw blocks for a long window
 This normalizes each camera to ONE aligned 1 FPS clip covering the whole race
 (race start → end), so every panel then lines up at offset 0.
 
-Efficiency: reads each block directly from the bucket over HTTPS with ffmpeg
-range seeks (gs://class-demo is public-read), so it transfers only the needed
-segment at 1 FPS — no 120 GB of downloads, no Cloud Shell disk pressure. If the
-bucket isn't public in your setup, pass --auth to use signed URLs via gcloud.
+Efficiency: reads each block directly from the bucket over AUTHENTICATED HTTPS
+(bearer token from `gcloud auth print-access-token`) with ffmpeg range seeks, so
+it transfers only the needed segment at 1 FPS — no 120 GB of downloads, no Cloud
+Shell disk pressure. Run it where gcloud is authed with read on the bucket (e.g.
+the class-demo owning project). If range reads misbehave, pass --download to copy
+each block locally first (robust, ~1.7 GB transient per block).
 
 Output:
   <out>/cam_XX_1fps.mp4      one aligned 1 FPS clip per camera
@@ -43,6 +45,13 @@ PANEL_W, PANEL_H = 480, 270
 FNAME_RE = re.compile(r"(Cam\d+)-\d+-(\d{6})-(\d{6})\.mp4")
 
 
+def _access_token() -> str:
+    """Fresh OAuth token for authenticated GCS reads (tokens last ~1h; we refetch
+    per block so long runs don't expire)."""
+    return subprocess.run(["gcloud", "auth", "print-access-token"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
 def _local_to_utc(hhmmss: str) -> datetime:
     """A block's HHMMSS local time → UTC datetime on race day."""
     t = datetime.strptime(hhmmss, "%H%M%S")
@@ -67,9 +76,14 @@ def list_blocks() -> dict[str, list[tuple[str, datetime, datetime]]]:
     return blocks
 
 
-def normalize_camera(cam: str, blocks: list, out_dir: str, use_auth: bool) -> str | None:
+def normalize_camera(cam: str, blocks: list, out_dir: str, download: bool) -> str | None:
     """Extract the race-overlapping 1 FPS segments from a camera's blocks and
-    concat them into one aligned clip starting at race start."""
+    concat them into one aligned clip starting at race start.
+
+    Default: read each block over AUTHENTICATED HTTPS with a bearer token (range
+    seeks, no full download). `download=True` falls back to copying each block
+    locally first (robust, but ~1.7 GB per block — deletes it right after).
+    """
     segs: list[str] = []
     seg_paths: list[str] = []
     for i, (fname, b_start, b_end) in enumerate(blocks):
@@ -79,15 +93,26 @@ def normalize_camera(cam: str, blocks: list, out_dir: str, use_auth: bool) -> st
             continue                                    # block doesn't overlap the race
         offset = (seg_start - b_start).total_seconds()  # into the block
         dur = (seg_end - seg_start).total_seconds()
-        src = (f"{BUCKET_HTTPS}/{fname}" if not use_auth
-               else subprocess.run(["gcloud", "storage", "sign-url", f"{BUCKET_GS}/{fname}",
-                                    "--duration=1h", "--format=value(signed_url)"],
-                                   capture_output=True, text=True, check=True).stdout.strip())
         seg = os.path.join(out_dir, f"{cam}_seg{i}.mp4")
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(offset),
+
+        pre_i, tmp_block = [], None
+        if download:
+            tmp_block = os.path.join(out_dir, f"{cam}_blk{i}.mp4")
+            subprocess.run(["gcloud", "storage", "cp", f"{BUCKET_GS}/{fname}", tmp_block],
+                           check=True)
+            src = tmp_block
+        else:
+            src = f"{BUCKET_HTTPS}/{fname}"
+            token = _access_token()
+            pre_i = ["-headers", f"Authorization: Bearer {token}\r\n",
+                     "-multiple_requests", "1"]
+
+        subprocess.run(["ffmpeg", "-v", "error", "-y", *pre_i, "-ss", str(offset),
                         "-i", src, "-t", str(dur),
                         "-vf", f"fps=1,scale={PANEL_W}:{PANEL_H}",
                         "-c:v", "libx264", "-crf", "28", "-an", seg], check=True)
+        if tmp_block:
+            os.unlink(tmp_block)
         segs.append(f"file '{os.path.basename(seg)}'")
         seg_paths.append(seg)
 
@@ -135,8 +160,9 @@ def main() -> int:
                          "(optionally 'CamXX,LABEL')")
     ap.add_argument("--out-dir", default="/tmp/cam_1fps")
     ap.add_argument("--config", default="notebooks/camera_groups.full.json")
-    ap.add_argument("--auth", action="store_true",
-                    help="use signed URLs instead of public HTTPS")
+    ap.add_argument("--download", action="store_true",
+                    help="copy each block locally before extracting (robust "
+                         "fallback if authenticated HTTPS range reads fail)")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -155,7 +181,7 @@ def main() -> int:
         if cam not in blocks:
             print(f"  {cam}: no blocks found — check the ID")
             continue
-        clip = normalize_camera(cam, blocks[cam], args.out_dir, args.auth)
+        clip = normalize_camera(cam, blocks[cam], args.out_dir, args.download)
         if clip:
             clips[cam] = clip
 
