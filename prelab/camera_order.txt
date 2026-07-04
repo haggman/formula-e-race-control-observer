@@ -1,0 +1,11 @@
+# Cameras in TRACK ORDER (from the label probe), one per line: CamXX,LABEL
+# Groups are consecutive fours: lines 1-4 = group 1, 5-8 = group 2, etc.
+# CONFIRMED so far (east loop) — verify the rest with prelab/probe_camera_labels.sh
+# and fill in the true order before running normalize_cameras.py.
+#
+# ... (cameras leading into the east loop) ...
+Cam18,CAM18 T12
+Cam19,CAM19 T13
+Cam20,CAM20 T14
+Cam21,CAM21 PIT/T15
+# ... (remaining 20 cameras in track order) ...

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formula-e-race-control-observer"
+version = "0.1.0"
+description = "Formula E Proactive Race Control Observer — Challenge 3 (Safety) reference build"
+requires-python = ">=3.10"
+
+# Dependencies live in requirements.txt for venv setup; this file just makes
+# our own packages importable so cross-package imports work.
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shared*", "observers*", "correlator*"]
+exclude = [".venv*", "scripts*", "deploy*", "setup*", "frontend*", "build*"]

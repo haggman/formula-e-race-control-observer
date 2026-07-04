@@ -1,0 +1,48 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checkers
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Local env
+.env
+.envrc
+
+# OS / editor scratch
+*.swp
+.DS_Store
+
+# Staged media + data — never committed; lives in the class-demo GCS bucket
+# and (locally) in ../_video_scratch/
+_video_scratch/
+*.mp4
+*.mxf
+*.parquet
+frames/
+
+.adk/

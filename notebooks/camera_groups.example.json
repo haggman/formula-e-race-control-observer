@@ -1,0 +1,17 @@
+{
+  "_comment": "Track-ordered 2x2 camera groups for the mosaic prebuild. Sources are gs:// URIs into the class bucket (run build_camera_mosaics.py where the bucket is readable, e.g. Cloud Shell). Each group's 4 panels are physically consecutive cameras in TRAVEL order (TL->TR->BL->BR). 'src_offset_s' is the offset into each source file at which the group's start_utc occurs (CCTV blocks per camera start at slightly different local times, so offsets differ per panel). Order was derived from each camera's burned-in turn label. Fill the remaining groups the same way for full-track coverage (24 cams -> 6 groups).",
+  "race_id": "berlin_2024_r10",
+  "groups": [
+    {
+      "group_id": "grp_t12_t15",
+      "start_utc": "2024-05-12T13:31:55Z",
+      "duration_s": 40,
+      "panels": [
+        {"camera_id": "Cam18", "label": "CAM18 T12", "source": "gs://class-demo/formula-e/footage/berlin_r10/cctv/Cam18-12052024-151216-154216.mp4", "src_offset_s": 1179},
+        {"camera_id": "Cam19", "label": "CAM19 T13", "source": "gs://class-demo/formula-e/footage/berlin_r10/cctv/Cam19-12052024-152856-155856.mp4", "src_offset_s": 179},
+        {"camera_id": "Cam20", "label": "CAM20 T14", "source": "gs://class-demo/formula-e/footage/berlin_r10/cctv/Cam20-12052024-151225-154225.mp4", "src_offset_s": 1170},
+        {"camera_id": "Cam21", "label": "CAM21 PIT/T15", "source": "gs://class-demo/formula-e/footage/berlin_r10/cctv/Cam21-12052024-151231-154231.mp4", "src_offset_s": 1164}
+      ]
+    }
+  ]
+}
