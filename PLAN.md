@@ -281,6 +281,39 @@ the video-in-the-loop demo runs at 1× (house guidance already says "demo at 1×
   to a flag point — incident race-times documented (hero = ~1680 / 13:32:11).
   **Blocked on Patrick:** run the probe → fill camera_order.txt → run normalize +
   mosaics + upload in Cloud Shell (needs bucket access; I can't from here).
+- **2026-07-04 (normalize validated)** — Fixed the CCTV 403 (footage isn't public
+  → authenticated HTTPS via `gcloud auth print-access-token`, refreshed per block;
+  `--download` fallback added). Patrick ran normalize on the 4 confirmed east-loop
+  cams: 4 aligned clips at **2879–2880 s** (full race) + 1 group config. Alignment
+  VERIFIED on frame 1691 (13:32:11): Cam18(T12)/Cam19(T13)/Cam20(T14)/Cam21(pit)
+  all read 15:32:11–12 — panels time-synced. (Track empty = the known T15 blind
+  spot, not an alignment issue.) Pipeline proven end-to-end; remaining work is
+  filling all 24 cameras and running the full 6-group generation + upload.
+
+- **2026-07-04 (video plane staged + validated)** — Cameras are numbered in track
+  order (Cam01=FL … Cam20=T14, Cam21=pit-entry, Cam22-24=pit lane; no dedicated
+  T15 camera → confirms the Fenestraz blind spot). Full 24-camera normalize + 6
+  mosaic groups generated and uploaded to `gs://class-demo/formula-e/r10/mosaics/`
+  (6 mp4 ≈ 45-52 MB each + manifest.json, 325 MB total). End-to-end VALIDATED:
+  Group 1 mosaic at frame 692 (13:15:32) shows labeled, time-aligned panels
+  (CAM01-04) with the Günther T1-T2 incident in view. Video plane complete. (Note:
+  deleted a stale `grp_01_cam18…` from the earlier 4-cam proof run.) Group→incident
+  note: Günther T1-2 is on-camera in Group 1; the Fenestraz hero incident is the
+  T15 blind spot (relies on corroboration logic).
+
+- **2026-07-04 (setup ladder)** — Built the student install ladder (borrowed Ch2
+  shape, simplified — no BQ/toolbox/subagent; Firestore holds only the "now" doc
+  so no composite indexes). `activate.sh` (project/region/venv/ADC preflight/
+  Vertex + SIM_URL + MOSAICS_BUCKET), `setup/_lib.sh`, and five numbered steps →
+  `deploy/` scripts: 1 enable_apis (lean set), 2 setup_firestore (Native DB only),
+  3 deploy_state_writer (worker pool), 4 deploy_simulator, 5 stage_mosaics (create
+  `gs://${PROJECT_ID}-fe-mosaics` + copy the 6 mosaics from class-demo).
+  `setup/all.sh` runs 1-5 + verify; `verify_checks.py` green-lights three things:
+  simulator publishing, Firestore "now" advancing (proves the full
+  sim→PubSub→worker→Firestore path), mosaics staged. All scripts pass `bash -n` /
+  `py_compile`. **The data layer is now installable in a fresh Qwiklabs project
+  with `source activate.sh && bash setup/all.sh`.** (Untested on real GCP — Patrick
+  runs it in a lab project to confirm.)
 
 ## Build status (what exists now)
 
@@ -292,8 +325,8 @@ the video-in-the-loop demo runs at 1× (house guidance already says "demo at 1×
 - [ ] Ground-truth incident timeline (grading oracle, from RC log + press)
 - [x] Correlator / Reporter — fusion + flag policy + report drafting (validated offline)
 - [x] Data plane — simulator (→Pub/Sub) + state-writer Worker Pool (→Firestore), borrowed from Ch2
-- [x] Video plane — prebuilt 2×2 track-ordered mosaic pipeline (build_camera_mosaics.py) + manifest
-- [ ] setup/ ladder to install/deploy the whole data layer (enable APIs, Firestore, deploy sim + state-writer, stage mosaics) — borrow Ch2
+- [x] Video plane — prebuilt 2×2 mosaics GENERATED + staged in class-demo + validated (6 groups, 325 MB)
+- [x] setup/ install ladder — activate.sh + 5 numbered steps + all.sh + verify (green-light check), borrowed from Ch2
 - [ ] Telemetry observer as a stream consumer (subscribe fe-telemetry → detector → Observations)
 - [ ] Video feeder (clock-paced replay of prebuilt mosaic → video observer)
 - [ ] A2A wiring (observers as services → correlator as RemoteA2aAgent)
