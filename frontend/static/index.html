@@ -20,19 +20,27 @@
   header h1{font-size:16px;margin:0;letter-spacing:.5px;font-weight:700}
   header .dot{width:9px;height:9px;border-radius:50%;background:#555;display:inline-block;margin-right:6px}
   header .dot.live{background:var(--green);box-shadow:0 0 8px var(--green)}
+  #pauseTag{display:none;font-size:12px;font-weight:800;letter-spacing:1px;
+            padding:3px 10px;border-radius:12px;background:var(--sc);color:#2a0000}
+  #pauseTag.on{display:inline-block}
   .clock{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--dim)}
   .clock b{color:var(--ink);font-size:16px}
   #banner{padding:6px 16px;font-weight:700;text-align:center;display:none}
-  .wrap{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:10px;padding:10px}
-  .map{flex:1 1 auto;min-height:0;background:var(--panel);border:1px solid var(--edge);
+
+  /* three full-height columns: telemetry | center(map+recs) | video */
+  .wrap{flex:1 1 auto;min-height:0;display:grid;
+        grid-template-columns:1fr 1.7fr 1fr;gap:10px;padding:10px}
+  .center{display:flex;flex-direction:column;gap:10px;min-height:0}
+  .map{flex:1 1 44%;min-height:0;background:var(--panel);border:1px solid var(--edge);
        border-radius:10px;overflow:hidden}
   .map svg{width:100%;height:100%;display:block}
-  .cols{flex:0 0 auto;height:230px;display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:10px}
   .col{background:var(--panel);border:1px solid var(--edge);border-radius:10px;
        display:flex;flex-direction:column;min-height:0}
+  .center>.col{flex:1 1 56%}
   .col h2{margin:0;padding:9px 12px;font-size:12px;letter-spacing:1px;text-transform:uppercase;
           border-bottom:1px solid var(--edge);color:var(--dim)}
   .col.tele h2{color:var(--tele)} .col.video h2{color:var(--video)}
+  .col.recs h2{color:var(--ink)}
   .feed{overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px}
   .item{background:var(--panel2);border:1px solid var(--edge);border-left:3px solid var(--edge);
         border-radius:6px;padding:6px 9px;font-size:12.5px}
@@ -69,6 +77,10 @@
         color:var(--ink);cursor:pointer;font-size:12.5px;font-weight:600}
   .cbtn:hover{border-color:#3a536b}
   .cbtn.jump{background:#17222e}
+  .cbtn.active{background:#26527d;border-color:var(--tele);color:#fff;box-shadow:0 0 0 1px var(--tele) inset}
+  .cbtn.jump.active{background:#7a3b12;border-color:var(--dbl);color:#fff;box-shadow:0 0 0 1px var(--dbl) inset}
+  .cbtn.paused{background:#5a2020;border-color:var(--sc);color:#ffd7d7;
+               box-shadow:0 0 0 1px var(--sc) inset}
   .sep{width:1px;height:22px;background:var(--edge);margin:0 4px}
   /* map bits */
   text{fill:var(--dim);font-size:9px}
@@ -81,33 +93,34 @@
 <body>
 <header>
   <span id="live" class="dot"></span><h1>FORMULA E · RACE CONTROL</h1>
+  <span id="pauseTag">⏸ PAUSED</span>
   <span class="clock">RACE <b id="clock">—</b></span>
 </header>
 <div id="banner"></div>
 
 <div class="wrap">
-  <div class="map">
-    <svg id="svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="col tele"><h2>▸ Telemetry Agent</h2><div class="feed" id="teleFeed"></div></div>
+  <div class="center">
+    <div class="map">
+      <svg id="svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div class="col recs"><h2>◆ Race Control — Recommendations</h2><div class="feed" id="recs"></div></div>
   </div>
-  <div class="cols">
-    <div class="col tele"><h2>▸ Telemetry Agent</h2><div class="feed" id="teleFeed"></div></div>
-    <div class="col"><h2>◆ Race Control — Recommendations</h2><div class="feed" id="recs"></div></div>
-    <div class="col video"><h2>▸ Video Agent</h2><div class="feed" id="videoFeed"></div></div>
-  </div>
+  <div class="col video"><h2>▸ Video Agent</h2><div class="feed" id="videoFeed"></div></div>
 </div>
 
 <div class="bar">
   <span class="lbl">Jump to</span><span class="grp" id="jumpBtns"></span>
   <span class="sep"></span>
   <span class="grp">
-    <button class="cbtn" onclick="ctl('pause')">⏸ Pause</button>
-    <button class="cbtn" onclick="ctl('resume')">▶ Resume</button>
+    <button class="cbtn" id="btnPause" onclick="ctl('pause')">⏸ Pause</button>
+    <button class="cbtn" id="btnResume" onclick="ctl('resume')">▶ Resume</button>
     <button class="cbtn" onclick="ctl('restart')">⟲ Restart</button>
   </span>
   <span class="sep"></span>
   <span class="grp"><span class="lbl">Speed</span>
-    <button class="cbtn" onclick="speed(1)">1×</button>
-    <button class="cbtn" onclick="speed(2)">2×</button>
+    <button class="cbtn" id="spd1" onclick="speed(1)">1×</button>
+    <button class="cbtn" id="spd2" onclick="speed(2)">2×</button>
   </span>
 </div>
 
@@ -115,6 +128,8 @@
 const GREEN_FLAG = Date.UTC(2024,4,12,13,4,0)/1000;   // race_time_s = 0
 let geom=null, B=null;
 const carEls={}, incEls={}, recEls={};
+const jumpEls=[];          // jump buttons, in chronological order
+let activeJump=null;       // currently-selected jump button
 
 function gpsXY(lat,lng){
   return [B.pad+(lng-B.lng_min)/(B.lng_max-B.lng_min)*(B.w-2*B.pad),
@@ -138,11 +153,12 @@ async function initMap(){
     const g=el('g',{}); const s=el('rect',{x:c.x-4,y:c.y-4,width:8,height:8,rx:2,class:'cam'});
     s.id='cam_'+c.id; g.appendChild(s); svg.appendChild(g);
   });
-  // jump buttons
+  // jump buttons — chronological (by race_time_s)
   const jb=document.getElementById('jumpBtns');
-  geom.incidents.forEach(i=>{const b=document.createElement('button');
+  const incs=[...geom.incidents].sort((a,b)=>a.race_time_s-b.race_time_s);
+  incs.forEach(i=>{const b=document.createElement('button');
     b.className='cbtn jump';b.textContent=i.label;b.title=i.note||'';
-    b.onclick=()=>jump(i.race_time_s);jb.appendChild(b);});
+    b.onclick=()=>jump(i.race_time_s,b);jb.appendChild(b);jumpEls.push(b);});
 }
 
 // ---- feeds ----
@@ -217,12 +233,30 @@ function onCars(m){
 }
 
 // ---- controls ----
-async function ctl(p){await fetch('/control/'+p,{method:'POST'});}
-async function jump(t){await fetch('/control/jump',{method:'POST',
-  headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});}
+async function ctl(p){await fetch('/control/'+p,{method:'POST'});pollStatus();}
+async function jump(t,btn){
+  if(btn){jumpEls.forEach(b=>b.classList.remove('active'));btn.classList.add('active');activeJump=btn;}
+  await fetch('/control/jump',{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});
+  pollStatus();
+}
 async function speed(m){await fetch('/control/speed',{method:'POST',
-  headers:{'content-type':'application/json'},body:JSON.stringify({multiplier:m})});}
+  headers:{'content-type':'application/json'},body:JSON.stringify({multiplier:m})});pollStatus();}
 async function decide(id,d){await fetch(`/incident/${id}/${d}`,{method:'POST'});}
+
+// ---- sim status → reflect pause/speed state on the controls ----
+function applyStatus(s){
+  const paused=!!s.paused;
+  document.getElementById('pauseTag').classList.toggle('on',paused);
+  document.getElementById('btnPause').classList.toggle('paused',paused);
+  document.getElementById('btnResume').classList.toggle('active',!paused);
+  const mult=Math.round(s.speed_multiplier||1);
+  document.getElementById('spd1').classList.toggle('active',mult<=1);
+  document.getElementById('spd2').classList.toggle('active',mult>=2);
+}
+async function pollStatus(){
+  try{const s=await (await fetch('/control/status')).json();applyStatus(s);}catch(e){}
+}
 
 // ---- websocket ----
 function connect(){
@@ -238,6 +272,7 @@ function connect(){
   setInterval(()=>{try{ws.send('ping')}catch(e){}},15000);
 }
 initMap().then(connect);
+pollStatus(); setInterval(pollStatus,2000);
 </script>
 </body>
 </html>

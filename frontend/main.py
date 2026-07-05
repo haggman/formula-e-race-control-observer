@@ -190,6 +190,18 @@ async def jump(body: dict):
     return await _sim_post("/resume")
 
 
+@app.get("/control/status")
+async def sim_status():
+    """Proxy the sim's /status so the UI can reflect paused/speed/clock."""
+    if not SIM_URL:
+        return {"ok": False}
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            return (await c.get(f"{SIM_URL}/status")).json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/control/pause")
 async def pause():
     return await _sim_post("/pause")

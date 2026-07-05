@@ -13,9 +13,10 @@ is stalled". The 1 FPS feed, the sync, and the Observation contract are unchange
 
 Lifecycle: the one Gemini spender, so its cost is gated on the clock. While
 race_time_s advances it calls the model every OBSERVE_EVERY_S seconds; when the
-sim pauses/ends it makes NO calls (cost = 0) and keeps polling cheaply; the 10-min
-deadman is the backstop if the UI dies without signalling. It does NOT idle-exit,
-so a brief pause won't kill the process.
+sim pauses/ends it makes NO calls (cost = 0) and keeps polling cheaply. It does
+NOT idle-exit, so a brief pause won't kill the process. By default it runs until
+stopped (like the other agents); pass --max-runtime SECONDS to re-arm a deadman
+backstop for unattended runs.
 
 Run (after `source activate.sh`, with the simulator publishing):
     python -m observers.video.observer --group grp_01_cam01_cam02_cam03_cam04
@@ -246,7 +247,9 @@ def main() -> int:
     ap.add_argument("--local", default=None, help="local dir of mosaics instead of a bucket")
     ap.add_argument("--sim-url", default=os.environ.get("SIM_URL", ""))
     ap.add_argument("--model", default=None)
-    ap.add_argument("--max-runtime", type=float, default=600.0, help="deadman backstop seconds")
+    ap.add_argument("--max-runtime", type=float, default=0.0,
+                    help="deadman backstop seconds; 0 = run until stopped (default, like the "
+                         "other agents). Set e.g. 600 to re-arm the 10-min backstop.")
     ap.add_argument("--window", type=int, default=WINDOW_S,
                     help="seconds of frames to send per call (sliding window)")
     ap.add_argument("--publish", action="store_true",
@@ -273,9 +276,9 @@ def main() -> int:
         observer.emit = show
 
     # install_signals=False: the async runner installs asyncio-native handlers
-    # instead (so Ctrl-C cancels the in-flight call immediately). Deadman backstop
-    # only, no idle-exit — a pause must not kill it; the clock gate just stops
-    # making model calls.
+    # instead (so Ctrl-C cancels the in-flight call immediately). No idle-exit —
+    # a pause must not kill it; the clock gate just stops making model calls. The
+    # deadman is off by default (--max-runtime 0) so testing isn't interrupted.
     with Session(max_runtime_s=(args.max_runtime or None), idle_timeout_s=None,
                  name="video", install_signals=False) as sess:
         reason = asyncio.run(_run_with_signals(observer, sess))
