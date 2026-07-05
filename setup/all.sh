@@ -21,8 +21,22 @@ done
 
 bash setup/verify.sh
 
+# Discover the now-deployed simulator URL and cache it (+ mosaics bucket) to
+# .env.local, which activate.sh auto-loads. This is why no re-source is needed:
+# scripts already re-discover SIM_URL, and future shells read it from here.
+SIM_URL="$(timeout 10 gcloud run services describe fe-simulator \
+    --region "$REGION" --format='value(status.url)' </dev/null 2>/dev/null || true)"
+{
+    [[ -n "$SIM_URL" ]] && echo "export SIM_URL=${SIM_URL}"
+    echo "export MOSAICS_BUCKET=${MOSAICS_BUCKET:-${PROJECT_ID}-fe-mosaics}"
+} > .env.local
+
 echo ""
 echo "=================================================================="
-printf "  setup/all.sh complete in %dm %02ds\n" $(( (SECONDS - T0) / 60 )) $(( (SECONDS - T0) % 60 ))
-echo "  Next: source activate.sh   (picks up SIM_URL in this shell)"
+printf "  setup/all.sh complete in %dm %02ds — data layer is live.\n" \
+    $(( (SECONDS - T0) / 60 )) $(( (SECONDS - T0) % 60 ))
+echo "  Simulator:  ${SIM_URL:-(deployed — re-run verify if blank)}"
+echo "  Jump to the hero incident (13:32 corroborated stop):"
+echo "    curl -X POST ${SIM_URL}/jump -H 'content-type: application/json' -d '{\"race_time_s\": 1680}'"
+echo "  (SIM_URL cached in .env.local; picked up automatically next activate.)"
 echo "=================================================================="

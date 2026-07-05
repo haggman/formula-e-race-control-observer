@@ -315,19 +315,66 @@ the video-in-the-loop demo runs at 1× (house guidance already says "demo at 1×
   with `source activate.sh && bash setup/all.sh`.** (Untested on real GCP — Patrick
   runs it in a lab project to confirm.)
 
+- **2026-07-04 (telemetry observer + lifecycle)** — Built the first agent as an
+  on-demand stream consumer, plus the shared lifecycle that keeps agents from
+  running 24/7 (Patrick's Gemini-budget requirement). `shared/lifecycle.py`:
+  a `Session` with a 10-min deadman cap, graceful SIGTERM/SIGINT stop, and an idle
+  watchdog — all four transitions unit-tested. `observers/telemetry/consumer.py`:
+  subscribes to fe-telemetry (own sub, SEEK-to-now so only live frames), rolling
+  per-car window → deterministic detector → Observations, all under the Session;
+  deterministic (no Gemini). Validated offline by replaying the full race through
+  `TelemetryObserver` — detects the exact validated set [2,7,17,23,33,48] incl. the
+  hero (23+17) and Günther (7). Pub/Sub transport untested (needs GCP). Lifecycle
+  note: the video observer (the real Gemini cost) will wear this same Session, and
+  the UI will spawn observers on launch + SIGTERM them on exit; the deadman cap is
+  the backstop if the UI dies uncleanly.
+
+- **2026-07-04 (lifecycle refined — clock-as-switch)** — Reframed the lifecycle:
+  gate Gemini activity on the sim CLOCK, don't cap the cheap parts. `max_runtime_s`
+  is now optional (None disables the deadman). The telemetry observer (Gemini-free)
+  runs with NO deadman — clock-gated by the idle watchdog (quiet stream → stop) +
+  graceful SIGTERM. The deadman is reserved for the video observer (the Gemini
+  spender) as a backstop. Plan for the video observer: hold a Live session only
+  while `race_time_s` is advancing; if the sim pauses/ends, idle → CLOSE the Live
+  session (stop token burn) → reopen when the clock moves. So launching/pausing the
+  simulator is itself the on/off switch for Gemini cost.
+
+### UI note (for the console build)
+Put a row of buttons along the bottom of the Race Control console that each
+`POST /jump` the simulator to ~2 min before a known incident. Candidate incident
+list (already have it from the detector; finalize as "definitive"):
+  95s (#33), 692s (#7 Günther → 1st SC), 1510s (#2 Vandoorne pit),
+  1680s (#23+#17 Fenestraz/Nato — corroborated hero → SC), 1781s (#48 Mortara).
+So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
+
+- **2026-07-04 (video observer — clock-gated, OO)** — Built the Gemini Live video
+  observer as clean OO Python (checked current Live API docs: `client.aio.live.
+  connect`, turn-based `send_client_content` + `receive`; Vertex model
+  `gemini-live-2.5-flash`, env-overridable). Modules: `observers/video/clock.py`
+  (SimClock polling /status, advancing detection), `mosaic_source.py` (download +
+  1 FPS extract, frame_path(race_second), panel layout from manifest),
+  `prompts.py` (grid-aware persona naming each panel's camera_id), `observer.py`
+  (`VideoObserver`: CLOCK-GATED Live session — opens while race_time_s advances,
+  CLOSES on pause/stall so Gemini cost tracks the sim; deadman backstop, NO
+  idle-exit so brief pauses don't kill it; turn-based frame+request cycle isolated
+  in `_observe_once` for easy strategy swap). Offline-validated: frame indexing,
+  grid prompt, report parsing (pos/neg/garbage), and the clock-gating loop
+  (open→observe while advancing → close on stall). Live Gemini call pending GCP.
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging
 - [x] `shared/models.py` — data contracts
 - [x] `observers/telemetry/detector.py` — deterministic trigger (validated)
 - [ ] Telemetry Observer agent (characterize a triggered window)
-- [x] Video Observer (Gemini Live, 1 FPS) — built; live inference pending Cloud Shell
+- [x] Video Observer (Gemini Live, 1 FPS) — REBUILT clock-gated + OO (clock/mosaic_source/observer), grid-aware; live inference pending Cloud Shell
 - [ ] Ground-truth incident timeline (grading oracle, from RC log + press)
 - [x] Correlator / Reporter — fusion + flag policy + report drafting (validated offline)
 - [x] Data plane — simulator (→Pub/Sub) + state-writer Worker Pool (→Firestore), borrowed from Ch2
 - [x] Video plane — prebuilt 2×2 mosaics GENERATED + staged in class-demo + validated (6 groups, 325 MB)
 - [x] setup/ install ladder — activate.sh + 5 numbered steps + all.sh + verify (green-light check), borrowed from Ch2
-- [ ] Telemetry observer as a stream consumer (subscribe fe-telemetry → detector → Observations)
+- [x] Agent lifecycle (shared/lifecycle.py) — deadman timeout / graceful stop / idle watchdog (the 'never 24/7' guarantee)
+- [x] Telemetry observer as a stream consumer (subscribe fe-telemetry, seek-to-now → detector → Observations); validated offline
 - [ ] Video feeder (clock-paced replay of prebuilt mosaic → video observer)
 - [ ] A2A wiring (observers as services → correlator as RemoteA2aAgent)
 - [ ] Race Control console (frontend, one-click approve/reject)

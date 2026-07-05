@@ -19,6 +19,12 @@ fi
 # --- Virtual environment ---
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
+
+# Load cached dynamic vars (SIM_URL etc.) that setup/all.sh discovered, so
+# activation is instant and needs no gcloud round-trip.
+# shellcheck disable=SC1091
+[[ -f "${REPO_ROOT}/.env.local" ]] && source "${REPO_ROOT}/.env.local"
+
 if [[ ! -d "$VENV_DIR" ]]; then
     echo ">>> Creating virtual environment at $VENV_DIR"
     python3 -m venv "$VENV_DIR"
@@ -66,6 +72,12 @@ export MOSAICS_BUCKET="${MOSAICS_BUCKET:-${PROJECT_ID}-fe-mosaics}"
 
 # --- Race + demo constants ---
 export RACE_ID="${RACE_ID:-berlin_2024_r10}"
+
+# --- Cache the dynamic values so future shells pick them up instantly ---
+{
+    [[ -n "${SIM_URL:-}" ]] && echo "export SIM_URL=${SIM_URL}"
+    echo "export MOSAICS_BUCKET=${MOSAICS_BUCKET}"
+} > "${REPO_ROOT}/.env.local" 2>/dev/null || true
 
 echo ""
 echo "=================================================================="

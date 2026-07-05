@@ -31,6 +31,7 @@ htmlcov/
 
 # Local env
 .env
+.env.local
 .envrc
 
 # OS / editor scratch
