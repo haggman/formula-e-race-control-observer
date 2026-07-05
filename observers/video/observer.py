@@ -29,6 +29,7 @@ import logging
 import os
 import signal
 import sys
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
@@ -48,7 +49,8 @@ logger = logging.getLogger("video.observer")
 # Standard Vertex vision model (image in, JSON text out). Override with
 # FE_VIDEO_MODEL if your project serves a different ID.
 DEFAULT_MODEL = "gemini-3.5-flash"
-OBSERVE_EVERY_S = 3          # request a structured report every N race-seconds
+WINDOW_S = 10                # send the last N seconds of frames per call (sliding)
+SCRATCHPAD_N = 8             # rolling memory: keep the last N reports for continuity
 GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)  # race_time_s=0
 
 _VIDEO_SIGNALS = {
@@ -101,17 +103,19 @@ class VideoObserver:
         mosaic: MosaicSource,
         *,
         model: Optional[str] = None,
-        observe_every_s: int = OBSERVE_EVERY_S,
+        window_s: int = WINDOW_S,
+        scratchpad_n: int = SCRATCHPAD_N,
         emit: Callable[[Observation], None] = lambda o: print(o.model_dump_json()),
     ):
         self.clock = clock
         self.mosaic = mosaic
-        self.observe_every_s = observe_every_s
+        self.window_s = window_s
         self.emit = emit
         self.model = model or os.environ.get("FE_VIDEO_MODEL") or DEFAULT_MODEL
         self._client = None
         self._active = False            # True while watching (clock advancing)
         self._last_processed = -1       # last race-second sent to the model
+        self._recent: deque = deque(maxlen=scratchpad_n)  # rolling report memory
 
     def _ensure_client(self) -> None:
         if self._client is None:
@@ -131,6 +135,8 @@ class VideoObserver:
                     data=open(fp, "rb").read(), mime_type="image/jpeg"))
         if not parts:
             return
+        if self._recent:                          # rolling memory → continuity
+            parts.append(types.Part(text=prompts.recent_context(list(self._recent))))
         parts.append(types.Part(text=prompts.OBSERVE_REQUEST))
 
         resp = await self._client.aio.models.generate_content(
@@ -145,6 +151,9 @@ class VideoObserver:
         ts = GREEN_FLAG + timedelta(seconds=race_seconds[-1])
         obs = parse_report(resp.text or "", ts)
         if obs:
+            self._recent.append(
+                f"{obs.ts_utc:%H:%M:%S} [{obs.location.camera_id}] "
+                f"{obs.summary} (sev {obs.severity_hint})")
             self.emit(obs)
 
     # -- the clock-gated loop ------------------------------------------------
@@ -167,12 +176,12 @@ class VideoObserver:
             session.touch()
 
             now_s = int(sample.race_time_s)
-            # Live observer: always look at the CURRENT window, never replay the
-            # backlog. On startup or right after a /jump we skip straight to 'now'
-            # (the model call takes a few seconds, so intermediate frames are
-            # dropped on purpose — we watch the present, not the past).
+            # Sliding window: each call looks at the last window_s seconds up to
+            # NOW (overlapping consecutive calls for temporal continuity). We
+            # anchor on 'now', so a startup or /jump skips straight to the present
+            # instead of replaying the backlog.
             if now_s > self._last_processed:
-                start = max(self._last_processed + 1, now_s - self.observe_every_s + 1)
+                start = max(0, now_s - self.window_s + 1)
                 await self._observe_once(list(range(start, now_s + 1)))
                 self._last_processed = now_s
             await asyncio.sleep(1.0)
@@ -221,7 +230,8 @@ def main() -> int:
     ap.add_argument("--sim-url", default=os.environ.get("SIM_URL", ""))
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-runtime", type=float, default=600.0, help="deadman backstop seconds")
-    ap.add_argument("--every", type=int, default=OBSERVE_EVERY_S)
+    ap.add_argument("--window", type=int, default=WINDOW_S,
+                    help="seconds of frames to send per call (sliding window)")
     args = ap.parse_args()
     if not args.sim_url:
         ap.error("--sim-url (or SIM_URL) required")
@@ -230,7 +240,7 @@ def main() -> int:
     mosaic = MosaicSource(mosaic_ref=mosaic_ref, group_id=args.group,
                           manifest_ref=manifest_ref).prepare()
     clock = SimClock(args.sim_url)
-    observer = VideoObserver(clock, mosaic, model=args.model, observe_every_s=args.every)
+    observer = VideoObserver(clock, mosaic, model=args.model, window_s=args.window)
 
     def show(o: Observation) -> None:
         print(f"  {o.ts_utc:%H:%M:%S} [{o.signal.value:<22}] cam={o.location.camera_id} "

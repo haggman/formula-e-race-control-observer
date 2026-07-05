@@ -402,6 +402,17 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   cars" — add a grid/standing-start exclusion to prompts.py if we ever watch from
   the green flag (mid-race jumps sidestep it). **Both observers now work live.**
 
+- **2026-07-05 (video observer memory)** — Two enhancements to the video observer:
+  (1) **10s sliding visual window** (was ~3 new frames) — each call sends the last
+  10 race-seconds of frames, overlapping consecutive calls, so the model reasons
+  about persistence/motion within one request (`--window`, default 10). (2) A
+  **bounded rolling scratchpad** — the last 8 reports are fed into each prompt as
+  "your recent reports," and the persona uses them to judge new vs ongoing vs
+  clearing (e.g. a flagged car being recovered). Bounded (deque maxlen) so the
+  prompt stays flat; the correlator still owns long-term cross-observer continuity.
+  Also switched to `gemini-3.5-flash` on the GLOBAL Vertex endpoint (regional 404'd)
+  via the shared `make_client()` helper. Offline-validated window + scratchpad.
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging

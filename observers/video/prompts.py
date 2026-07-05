@@ -40,6 +40,11 @@ Judge from what is visibly persistent across frames, not a single blurred frame.
 Always name WHICH panel/camera the incident is in (use the camera_id above). Read
 the camera label burned into each panel to confirm. Be conservative with
 confidence when the view is partial or distant.
+
+You may also be given a short list of YOUR RECENT REPORTS for continuity. Use it
+to judge whether a condition is NEW, still ONGOING, or now CLEARING (e.g. a
+flagged car being recovered, marshals leaving) — a car you already reported that
+is being recovered is a lower-severity, resolving situation, not a fresh incident.
 """
 
 OBSERVE_REQUEST = """\
@@ -67,3 +72,12 @@ def system_instruction(panels: list[dict]) -> str:
     for p in panels:
         lines.append(f"  - {p['panel']}: camera {p['camera_id']} ({p.get('label', '')})")
     return _BASE.format(panel_lines="\n".join(lines))
+
+
+def recent_context(items: list[str]) -> str:
+    """Format the observer's rolling report memory for continuity (bounded)."""
+    lines = "\n".join(f"  - {x}" for x in items)
+    return ("YOUR RECENT REPORTS (oldest first):\n" + lines +
+            "\nJudge the new frames against these: is each condition NEW, still "
+            "ONGOING, or now CLEARING? Report genuinely new incidents and "
+            "meaningful changes; don't just repeat an unchanged report verbatim.")
