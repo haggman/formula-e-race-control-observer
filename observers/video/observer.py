@@ -114,10 +114,9 @@ class VideoObserver:
         self._last_processed = -1       # last race-second sent to the model
 
     def _ensure_client(self) -> None:
-        from google import genai
         if self._client is None:
-            # Auto-detects the backend from env (Vertex via ADC by default).
-            self._client = genai.Client()
+            from shared.gemini import make_client
+            self._client = make_client()   # Vertex(global)/ADC, or Gemini API
 
     # -- one observation (the swappable strategy) ----------------------------
     async def _observe_once(self, race_seconds: list[int]) -> None:

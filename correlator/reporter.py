@@ -55,12 +55,9 @@ def _template_narrative(incident: CorrelatedIncident, flag) -> str:
 def _llm_narrative(incident: CorrelatedIncident, flag, model: str | None) -> str:
     """Gemini-drafted prose. Runs where Vertex/Gemini creds exist (Cloud Shell)."""
     import os
-    from google import genai
+    from shared.gemini import make_client
 
-    use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true"
-    model = model or os.environ.get("FE_REPORT_MODEL") or (
-        "gemini-2.0-flash" if use_vertex else "gemini-2.5-flash"
-    )
+    model = model or os.environ.get("FE_REPORT_MODEL") or "gemini-3.5-flash"
     facts = prompts.facts_block(
         incident_id=incident.incident_id,
         ts_utc=f"{incident.ts_utc:%Y-%m-%d %H:%M:%S}",
@@ -72,7 +69,7 @@ def _llm_narrative(incident: CorrelatedIncident, flag, model: str | None) -> str
         flag=flag.flag.value,
         flag_rationale=flag.rationale,
     )
-    client = genai.Client()
+    client = make_client()
     resp = client.models.generate_content(
         model=model,
         contents=facts,
