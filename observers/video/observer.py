@@ -252,6 +252,8 @@ def main() -> int:
     mosaic_ref, manifest_ref = _resolve_mosaic(args.group, args.bucket, args.local)
     mosaic = MosaicSource(mosaic_ref=mosaic_ref, group_id=args.group,
                           manifest_ref=manifest_ref).prepare()
+    logger.info("video observer online — mosaic %s ready (%d frames); waiting for the race clock",
+                args.group, mosaic.max_second + 1)
     clock = SimClock(args.sim_url)
     observer = VideoObserver(clock, mosaic, model=args.model, window_s=args.window)
 
