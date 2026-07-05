@@ -126,7 +126,7 @@ class CorrelatorService:
 
 
 def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
-        idle_timeout_s: float = 90.0) -> str:
+        idle_timeout_s: float | None = None) -> str:
     """Subscribe to the observation bus and correlate under the lifecycle."""
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if not project:
@@ -163,10 +163,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Correlator service (fuses the observation bus)")
     ap.add_argument("--no-llm", action="store_true", help="use the deterministic report template (no Gemini)")
     ap.add_argument("--max-runtime", type=float, default=0.0, help="optional deadman cap; 0 = none")
-    ap.add_argument("--idle-timeout", type=float, default=90.0)
+    ap.add_argument("--idle-timeout", type=float, default=0.0,
+                    help="stop after this many quiet seconds; 0 = run until stopped (default)")
     args = ap.parse_args()
     reason = run(use_llm=not args.no_llm,
-                 max_runtime_s=(args.max_runtime or None), idle_timeout_s=args.idle_timeout)
+                 max_runtime_s=(args.max_runtime or None),
+                 idle_timeout_s=(args.idle_timeout or None))
     logger.info("stopped (%s)", reason)
     return 0
 

@@ -457,6 +457,17 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   Pit box is a FIRST APPROXIMATION (one confirmed pit stop) — refine against the
   official pit geometry. Full timeline validated offline.
 
+- **2026-07-05 (backward-jump bug fixed)** — Live run surfaced a real bug: both
+  observers broke on a BACKWARD /jump (the common demo case — sim plays forward
+  while you start the agents, then you jump back to an incident). Video tracked
+  `_last_processed` and only ran when `now_s > _last_processed`, so after jumping
+  back it idled until the replay caught up; telemetry's per-car window still held
+  pre-jump samples ("newer" than the post-jump ones), so the detector saw stale
+  data. Fixes: telemetry detects a time discontinuity (backward, or forward >5s)
+  and clears all per-car state; video re-anchors `_last_processed = now_s-1` and
+  clears the scratchpad on a backward jump. Both validated offline (play to 13:18
+  → jump back to 685 → Günther stop + escalation detected on the new timeline).
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging

@@ -180,6 +180,12 @@ class VideoObserver:
             session.touch()
 
             now_s = int(sample.race_time_s)
+            # Backward /jump or /restart: the race clock went back, so re-anchor to
+            # the new 'now' and drop stale continuity memory — otherwise we'd sit
+            # idle until the replay caught back up to the old position.
+            if now_s < self._last_processed:
+                self._last_processed = now_s - 1
+                self._recent.clear()
             # Heartbeat so a quiet (no-incident) stretch is never mistaken for a
             # hang — shows it's alive, the race-time it's watching, and the count.
             if time.monotonic() - last_hb >= 12:

@@ -42,6 +42,8 @@ logger = logging.getLogger("telemetry.observer")
 
 WINDOW_S = 8.0            # rolling per-car window the detector scores
 DEBOUNCE_S = 10.0        # suppress repeats of the same (car, signal)
+JUMP_GAP_S = 5.0         # a race-time step bigger than this (or backward) = a
+                         # /jump or /restart → drop stale per-car state
 
 
 class TelemetryObserver:
@@ -55,11 +57,20 @@ class TelemetryObserver:
         self._last_fired: dict[tuple[int, str], float] = {}
         self._stop_since: dict[int, float] = {}       # car -> stop start epoch
         self._escalated: dict[int, bool] = {}         # car -> PROLONGED_STOP emitted
+        self._last_frame_ts: float | None = None      # for jump/restart detection
 
     def process_frame(self, frame: RaceFrame) -> list[Observation]:
         """Fold one frame into the per-car windows and return any new Observations."""
         out: list[Observation] = []
         now = frame.ts_utc.timestamp()
+
+        # Time discontinuity (a /jump or /restart) → the buffers hold stale
+        # samples from the old timeline; drop everything and start fresh.
+        if self._last_frame_ts is not None and (
+                now < self._last_frame_ts - 2 or now > self._last_frame_ts + JUMP_GAP_S):
+            self._buf.clear(); self._stopped.clear(); self._stop_since.clear()
+            self._escalated.clear(); self._last_fired.clear()
+        self._last_frame_ts = now
         for s in frame.to_samples():
             car = s.car_number
             buf = self._buf.setdefault(car, [])
@@ -147,7 +158,7 @@ def run(
     topic: str = "fe-telemetry",
     subscription: str = "fe-telemetry-observer-sub",
     max_runtime_s: float | None = None,
-    idle_timeout_s: float = 45.0,
+    idle_timeout_s: float | None = None,
     emit: Callable[[Observation], None] = _emit_print,
 ) -> str:
     """Consume the telemetry stream under the lifecycle. Returns the stop reason."""
@@ -198,8 +209,8 @@ def main() -> int:
     ap.add_argument("--subscription", default="fe-telemetry-observer-sub")
     ap.add_argument("--max-runtime", type=float, default=0.0,
                     help="optional deadman cap seconds; 0 = no cap (default)")
-    ap.add_argument("--idle-timeout", type=float, default=45.0,
-                    help="clock gate: stop after this many quiet seconds")
+    ap.add_argument("--idle-timeout", type=float, default=0.0,
+                    help="stop after this many quiet seconds; 0 = run until stopped (default)")
     ap.add_argument("--publish", action="store_true",
                     help="also publish Observations to the fe-observations bus (for the correlator)")
     args = ap.parse_args()
@@ -208,8 +219,8 @@ def main() -> int:
         from shared.observation_bus import make_emit
         emit = make_emit(also=_emit_print)
     reason = run(topic=args.topic, subscription=args.subscription,
-                 max_runtime_s=(args.max_runtime or None), idle_timeout_s=args.idle_timeout,
-                 emit=emit)
+                 max_runtime_s=(args.max_runtime or None),
+                 idle_timeout_s=(args.idle_timeout or None), emit=emit)
     logger.info("stopped (%s)", reason)
     return 0
 
