@@ -142,7 +142,8 @@ class VideoObserver:
             parts.append(types.Part(text=prompts.recent_context(list(self._recent))))
         parts.append(types.Part(text=prompts.OBSERVE_REQUEST))
 
-        resp = await self._client.aio.models.generate_content(
+        from shared.gemini import aretry_call
+        resp = await aretry_call(lambda: self._client.aio.models.generate_content(
             model=self.model,
             contents=[types.Content(role="user", parts=parts)],
             config=types.GenerateContentConfig(
@@ -150,7 +151,7 @@ class VideoObserver:
                 temperature=0.2,
                 response_mime_type="application/json",
             ),
-        )
+        ), what="video")
         ts = GREEN_FLAG + timedelta(seconds=race_seconds[-1])
         obs = parse_report(resp.text or "", ts)
         if obs:

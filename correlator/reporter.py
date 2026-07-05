@@ -55,7 +55,7 @@ def _template_narrative(incident: CorrelatedIncident, flag) -> str:
 def _llm_narrative(incident: CorrelatedIncident, flag, model: str | None) -> str:
     """Gemini-drafted prose. Runs where Vertex/Gemini creds exist (Cloud Shell)."""
     import os
-    from shared.gemini import make_client
+    from shared.gemini import make_client, retry_call
 
     model = model or os.environ.get("FE_REPORT_MODEL") or "gemini-3.5-flash"
     facts = prompts.facts_block(
@@ -70,11 +70,11 @@ def _llm_narrative(incident: CorrelatedIncident, flag, model: str | None) -> str
         flag_rationale=flag.rationale,
     )
     client = make_client()
-    resp = client.models.generate_content(
+    resp = retry_call(lambda: client.models.generate_content(
         model=model,
         contents=facts,
         config={"system_instruction": prompts.SYSTEM_INSTRUCTION, "temperature": 0.2},
-    )
+    ), what="report")
     return (resp.text or "").strip()
 
 
