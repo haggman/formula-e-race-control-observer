@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
@@ -41,6 +42,7 @@ from observers.video.mosaic_source import MosaicSource                      # no
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)  # quiet AFC noise
 logger = logging.getLogger("video.observer")
 
 # Standard Vertex vision model (image in, JSON text out). Override with
@@ -166,14 +168,39 @@ class VideoObserver:
             session.touch()
 
             now_s = int(sample.race_time_s)
-            pending = [s for s in range(self._last_processed + 1, now_s + 1)]
-            for i in range(0, len(pending), self.observe_every_s):
-                batch = pending[i:i + self.observe_every_s]
-                if len(batch) == self.observe_every_s or batch[-1] == now_s:
-                    await self._observe_once(batch)
-                    self._last_processed = batch[-1]
+            # Live observer: always look at the CURRENT window, never replay the
+            # backlog. On startup or right after a /jump we skip straight to 'now'
+            # (the model call takes a few seconds, so intermediate frames are
+            # dropped on purpose — we watch the present, not the past).
+            if now_s > self._last_processed:
+                start = max(self._last_processed + 1, now_s - self.observe_every_s + 1)
+                await self._observe_once(list(range(start, now_s + 1)))
+                self._last_processed = now_s
             await asyncio.sleep(1.0)
         return session.stop_reason or "stopped"
+
+
+async def _run_with_signals(observer: "VideoObserver", sess: Session) -> str:
+    """Run under asyncio-native signal handling so Ctrl-C / SIGTERM stop it
+    IMMEDIATELY — cancelling the in-flight model call rather than waiting for the
+    loop to notice a flag between ~5s calls."""
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(observer.run(sess))
+
+    def _stop() -> None:
+        logger.info("stop signal — shutting down video observer")
+        sess.request_stop("stopped")
+        task.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _stop)
+        except NotImplementedError:
+            pass  # non-Unix
+    try:
+        return await task
+    except asyncio.CancelledError:
+        return sess.stop_reason or "stopped"
 
 
 def _resolve_mosaic(group: str, bucket: Optional[str], local: Optional[str]) -> tuple[str, str]:
@@ -211,11 +238,13 @@ def main() -> int:
               f"conf={o.confidence:.2f} sev={o.severity_hint:>3}  {o.summary}")
     observer.emit = show
 
-    # Deadman backstop ONLY (no idle-exit — a pause must not kill it; the clock
-    # gate simply stops making model calls).
+    # install_signals=False: the async runner installs asyncio-native handlers
+    # instead (so Ctrl-C cancels the in-flight call immediately). Deadman backstop
+    # only, no idle-exit — a pause must not kill it; the clock gate just stops
+    # making model calls.
     with Session(max_runtime_s=(args.max_runtime or None), idle_timeout_s=None,
-                 name="video") as sess:
-        reason = asyncio.run(observer.run(sess))
+                 name="video", install_signals=False) as sess:
+        reason = asyncio.run(_run_with_signals(observer, sess))
     logger.info("stopped (%s)", reason)
     return 0
 

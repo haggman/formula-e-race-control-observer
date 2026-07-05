@@ -390,6 +390,18 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   deprecated in send_realtime_input (now `video=`) — moot now that we use
   generate_content.
 
+- **2026-07-05 (video observer WORKING live)** — First successful live run: the
+  video observer produced real structured incident reports from the Group 1 mosaic
+  on Vertex (`gemini-2.5-flash`, generate_content), e.g. "Car #11 stopped in CAM01
+  FL, #17 slow behind" / "#17,#25,#11,#37 stopped or stranded in CAM04 T2, some
+  facing the wrong way" — per-camera attribution, car numbers, severity, all good.
+  Fixed one bug: it replayed from race-second 0 instead of watching 'now' (grabbed
+  the whole backlog on startup) → now seeks to the current window each cycle,
+  dropping backlog after a /jump (verified: jump→620 processes ~620, not 0).
+  Quieted the AFC log noise. Known follow-up: a standing start reads as "stopped
+  cars" — add a grid/standing-start exclusion to prompts.py if we ever watch from
+  the green flag (mid-race jumps sidestep it). **Both observers now work live.**
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging
