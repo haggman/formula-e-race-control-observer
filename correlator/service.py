@@ -33,7 +33,9 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("correlator.service")
 
-BUFFER_S = 60.0          # keep Observations this long for fusion
+BUFFER_S = 180.0         # keep Observations this long (race-time) for fusion —
+                         # must exceed the telemetry↔video detection-latency gap
+                         # (video can lag the stop by ~90s) so both survive to fuse
 FUSE_EVERY_S = 2.0       # re-fuse the buffer this often
 
 # Flag severity ordering — used to decide what counts as an ESCALATION.
@@ -62,7 +64,7 @@ class CorrelatorService:
         self.on_report = on_report or self._default_report_sink
         self.race_id = race_id
         self._buf: deque[Observation] = deque()
-        self._announced: dict[tuple, int] = {}   # key -> best flag rank announced
+        self._announced: dict[tuple, tuple[int, bool]] = {}   # key -> (flag rank, corroborated)
         self._db = None
 
     # -- ingest --------------------------------------------------------------
@@ -87,19 +89,25 @@ class CorrelatorService:
             flag = fusion.recommend_flag(inc)
             rank = _FLAG_RANK.get(flag.flag, 0)
             key = _incident_key(inc)
-            prev = self._announced.get(key)
-            if prev is not None and rank <= prev:
-                continue                              # already announced at >= this level
-            self._announced[key] = rank
+            prev = self._announced.get(key)                 # (rank, corroborated) or None
+
+            escalated = prev is not None and rank > prev[0]
+            newly_confirmed = inc.corroborated and (prev is None or not prev[1])
+            if prev is not None and rank <= prev[0] and not newly_confirmed:
+                continue                                    # nothing new to say
+            self._announced[key] = (max(rank, prev[0] if prev else 0),
+                                    inc.corroborated or (prev[1] if prev else False))
+
+            kind = "NEW" if prev is None else ("ESCALATION" if escalated else "CONFIRMED")
             report = reporter.draft_report(inc, llm=self.use_llm)
             reports.append(report)
-            self.on_report(report, escalated=prev is not None)
+            self.on_report(report, kind=kind)
         return reports
 
     # -- report sinks --------------------------------------------------------
-    def _default_report_sink(self, report: IncidentReport, *, escalated: bool) -> None:
-        tag = "ESCALATION" if escalated else "NEW"
-        print(f"\n=== {tag} INCIDENT — {report.recommendation.flag.value.upper()} ===")
+    def _default_report_sink(self, report: IncidentReport, *, kind: str) -> None:
+        corr = " [corroborated by video]" if report.incident.corroborated else ""
+        print(f"\n=== {kind} INCIDENT — {report.recommendation.flag.value.upper()}{corr} ===")
         print(f"  {report.headline}")
         print(f"  {report.narrative}")
         self._write_firestore(report)

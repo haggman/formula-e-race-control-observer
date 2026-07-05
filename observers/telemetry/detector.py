@@ -44,6 +44,26 @@ from shared.models import (
 STOP_SPEED_KMH = 5.0        # at/below this we consider the car not moving
 STOP_HOLD_S = 6.0           # must hold that slow for this long to count
 STOP_CONF = 0.97            # near-certain: a stationary car on a live track
+STOP_ESCALATE_S = 18.0      # still stopped this long → PROLONGED_STOP (→ Safety Car
+                            # on telemetry alone, without waiting on video)
+PROLONGED_CONF = 0.98
+SEV_PROLONGED = 92
+
+# --- Pit-lane guard ---
+# A car sitting in its PIT BOX for 18s is a normal (long) pit stop, NOT a track
+# blockage — it must not trigger a Safety Car. Approximate box derived from
+# Vandoorne #2's confirmed R10 front-wing pit stop (52.48012, 13.39256); the four
+# real track incidents fall clearly outside it. FIRST APPROXIMATION — refine
+# against the official pit geometry (reference/cctv_tsbs_plan.pdf / circuit plan).
+PIT_LANE_BOX = {"lat_min": 52.4797, "lat_max": 52.4806,
+                "lng_min": 13.3916, "lng_max": 13.3938}
+
+
+def in_pit_lane(lat: float, lng: float) -> bool:
+    """True if a GPS point is inside the (approximate) pit-lane box."""
+    b = PIT_LANE_BOX
+    return (b["lat_min"] <= lat <= b["lat_max"] and
+            b["lng_min"] <= lng <= b["lng_max"])
 
 # --- Hard deceleration (secondary) ---
 # Measured envelope (Berlin R10, clean car): normal 1.5s speed drops peak at
@@ -103,6 +123,8 @@ def detect(
         not already_stopped
         and _span_s(tail) >= STOP_HOLD_S
         and all(s.speed_kmh <= STOP_SPEED_KMH for s in tail)
+        # A car stopped in its PIT BOX is a pit stop, not a track incident.
+        and not in_pit_lane(tail[-1].lat, tail[-1].lng)
     ):
         out.append(Observation(
             modality=Modality.TELEMETRY,

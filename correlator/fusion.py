@@ -35,10 +35,15 @@ from shared.models import (
 # Tunable knobs
 # ============================================================================
 
-# Time tolerance for grouping observations into one incident. Generous on
-# purpose — the modalities' clocks drift by seconds, and one incident unfolds
-# over several seconds (approach → contact → spin → rest).
-CORRELATION_WINDOW_S = 20.0
+# Time tolerance for grouping observations into one incident. Wide on purpose:
+# the two sensors detect the SAME incident at very different latencies. Telemetry
+# fires the instant speed→0 (~6s); the video observer only flags the visible
+# AFTERMATH (a stopped car with marshals), which can lag the stop by up to ~90s.
+# The window has to span that gap or the two never meet and nothing corroborates.
+# (Trade-off: in a dense-incident scenario this could merge two distinct incidents
+# that happen within the window — a location/car-aware correlator is the fuller
+# fix; for the jump-to-one-incident demo this wide window is correct.)
+CORRELATION_WINDOW_S = 120.0
 
 # Corroboration boost: when >1 modality agrees inside the window, the incident is
 # more certain and more severe than either observer alone claimed.
@@ -48,6 +53,7 @@ CORROBORATION_BOOST = 15
 # cross-modal anchor (telemetry sees speed→0, video sees it sitting there).
 _STOPPED_SIGNALS = {
     SignalType.STOPPED_CAR,
+    SignalType.PROLONGED_STOP,
     SignalType.STATIONARY_CAR_VISUAL,
 }
 
@@ -173,8 +179,11 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     ]
     stopped_cars = {o.car_number for o in stopped if o.car_number is not None}
     confirmed_stop = stopped and incident.corroborated
+    # A telemetry PROLONGED_STOP is a confirmed blockage on its own — escalate
+    # fast, without waiting for the (slow, variable) video corroboration.
+    prolonged = any(o.signal == SignalType.PROLONGED_STOP for o in incident.observations)
 
-    if len(stopped_cars) >= 2 or confirmed_stop or incident.severity >= 85:
+    if len(stopped_cars) >= 2 or confirmed_stop or prolonged or incident.severity >= 85:
         return FlagRecommendation(
             flag=FlagType.SAFETY_CAR, turns=turns,
             rationale=_stopped_rationale(stopped_cars, incident),

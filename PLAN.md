@@ -429,6 +429,34 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   Gemini touch and fires only on new/escalated incidents (cheap). **All three
   agents now run and fuse end to end.**
 
+- **2026-07-05 (correlator live + sensor-latency fix)** — First live correlator run
+  worked: telemetry flagged Günther #7 → **DOUBLE YELLOW** with a Gemini-drafted
+  report ("uncorroborated by video… confirmation pending"). Surfaced a key design
+  insight: the two sensors detect the SAME incident at very different latencies —
+  telemetry ~6s (speed→0), video ~73s (it only sees the visible aftermath: stopped
+  car + marshals). The 20s correlation window / 60s buffer were far too narrow, so
+  they never met. Widened `CORRELATION_WINDOW_S` 20→120 and `BUFFER_S` 60→180;
+  re-tested with the real 73s gap → now corroborates and escalates to SAFETY CAR.
+  Trade-off noted in code: a very wide window could merge two incidents within
+  120s (a location/car-aware correlator is the fuller fix; fine for the
+  jump-to-one-incident demo). The incident dedup key uses the stable earliest
+  (telemetry) timestamp, so the escalation is correctly recognized as the same
+  incident, not a new one.
+
+- **2026-07-05 (persistence escalation + pit guard)** — Removed the dependency on
+  the slow/variable video latency for the safety call. New `PROLONGED_STOP` signal:
+  the telemetry observer emits it when a stop persists ≥18s, and the fusion flag
+  policy escalates a single-source PROLONGED_STOP straight to SAFETY CAR (no video
+  wait). Added a **pit-lane guard** — a stop whose GPS is inside an approximate pit
+  box (derived from Vandoorne #2's confirmed R10 pit stop) is suppressed, so a long
+  pit stop can't trigger a phantom SC (validated: #2 and #33 suppressed; real track
+  stops #7/#23/#48 escalate; Nato #17, who got going again, correctly does NOT
+  escalate). Correlator announce logic now has three kinds: NEW (double-yellow) →
+  ESCALATION (safety-car, telemetry persistence at ~18s) → CONFIRMED (video
+  corroborates later, preserving the two-sensor moment without changing the flag).
+  Pit box is a FIRST APPROXIMATION (one confirmed pit stop) — refine against the
+  official pit geometry. Full timeline validated offline.
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging

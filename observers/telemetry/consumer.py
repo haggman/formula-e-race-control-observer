@@ -53,6 +53,8 @@ class TelemetryObserver:
         self._buf: dict[int, list[TelemetrySample]] = {}
         self._stopped: dict[int, bool] = {}
         self._last_fired: dict[tuple[int, str], float] = {}
+        self._stop_since: dict[int, float] = {}       # car -> stop start epoch
+        self._escalated: dict[int, bool] = {}         # car -> PROLONGED_STOP emitted
 
     def process_frame(self, frame: RaceFrame) -> list[Observation]:
         """Fold one frame into the per-car windows and return any new Observations."""
@@ -69,16 +71,41 @@ class TelemetryObserver:
             for obs in detector.detect(buf, already_stopped=self._stopped.get(car, False)):
                 if obs.signal == SignalType.STOPPED_CAR:
                     self._stopped[car] = True
+                    self._stop_since.setdefault(car, obs.ts_utc.timestamp())
                 key = (car, obs.signal.value)
                 if now - self._last_fired.get(key, -1e9) < self.debounce_s:
                     continue                       # caller-owned debounce
                 self._last_fired[key] = now
                 out.append(obs)
 
+            # Persistence escalation: still stopped past the escalate hold →
+            # PROLONGED_STOP (a confirmed blockage → Safety Car on telemetry alone,
+            # not waiting on the slow video corroboration).
+            if (self._stopped.get(car) and not self._escalated.get(car)
+                    and car in self._stop_since
+                    and now - self._stop_since[car] >= detector.STOP_ESCALATE_S):
+                self._escalated[car] = True
+                out.append(_prolonged_stop_obs(s, now - self._stop_since[car]))
+
             # release the stop latch once the car is clearly moving again
             if buf and buf[-1].speed_kmh > 30:
                 self._stopped[car] = False
+                self._stop_since.pop(car, None)
+                self._escalated[car] = False
         return out
+
+
+def _prolonged_stop_obs(s: TelemetrySample, held_s: float) -> Observation:
+    """Build the PROLONGED_STOP escalation Observation for a still-stopped car."""
+    from shared.models import Modality, SignalType, TrackLocation
+    return Observation(
+        modality=Modality.TELEMETRY, signal=SignalType.PROLONGED_STOP,
+        ts_utc=s.ts_utc, car_number=s.car_number,
+        confidence=detector.PROLONGED_CONF, severity_hint=detector.SEV_PROLONGED,
+        location=TrackLocation(gps_lat=s.lat, gps_lng=s.lng),
+        summary=f"car {s.car_number} STILL stopped after {held_s:.0f}s — confirmed blockage",
+        evidence={"held_s": round(held_s, 1)},
+    )
 
 
 # ---------------------------------------------------------------------------

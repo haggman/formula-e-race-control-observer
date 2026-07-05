@@ -122,6 +122,8 @@ class SignalType(str, Enum):
     """
     # Telemetry-derived
     STOPPED_CAR = "stopped_car"          # sustained speed ~0 (retirement / stopped on track)
+    PROLONGED_STOP = "prolonged_stop"    # STILL stopped after the escalation hold — a
+                                         # confirmed blockage; escalates on telemetry alone
     HARD_DECEL = "hard_decel"            # abrupt speed loss beyond racing envelope
     YAW_SPIKE = "yaw_spike"              # rotation spike (spin / snap)
     # Video-derived
