@@ -43,12 +43,15 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("video.observer")
 
-# Standard (half-cascade) Live model — built for video/image/text IN, TEXT out,
-# which is exactly our silent-CCTV -> JSON case (better than the audio-first
-# native-audio model). Prefer the newest your project has via FE_LIVE_MODEL:
-#   gemini-3.1-flash-live  (newest)  >  gemini-2.5-flash-live  >  native-audio.
-DEFAULT_MODEL_VERTEX = "gemini-2.5-flash-live"
-DEFAULT_MODEL_GEMINI = "gemini-live-2.5-flash-preview"
+# Live model per backend — Vertex and the Gemini Developer API have DIFFERENT
+# Live catalogs, so the right ID depends on how you authenticate:
+#   Vertex (ADC, GOOGLE_GENAI_USE_VERTEXAI=1): gemini-live-2.5-flash-native-audio
+#       is the GA model in us-central1 (video+image+text in, text out).
+#   Gemini API (GEMINI_API_KEY): gemini-3.1-flash-live-preview is the newest and
+#       the best text-out fit.
+# Override either with FE_LIVE_MODEL.
+DEFAULT_MODEL_VERTEX = "gemini-live-2.5-flash-native-audio"
+DEFAULT_MODEL_GEMINI = "gemini-3.1-flash-live-preview"
 OBSERVE_EVERY_S = 3          # request a structured report every N race-seconds
 GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)  # race_time_s=0
 
@@ -109,9 +112,9 @@ class VideoObserver:
         self.mosaic = mosaic
         self.observe_every_s = observe_every_s
         self.emit = emit
-        use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true")
+        self._use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true")
         self.model = model or os.environ.get("FE_LIVE_MODEL") or (
-            DEFAULT_MODEL_VERTEX if use_vertex else DEFAULT_MODEL_GEMINI)
+            DEFAULT_MODEL_VERTEX if self._use_vertex else DEFAULT_MODEL_GEMINI)
         self._client = None
         self._live_cm = None
         self._session = None            # the open Gemini Live session, or None
@@ -123,6 +126,9 @@ class VideoObserver:
             return
         from google import genai
         if self._client is None:
+            # genai.Client() auto-detects the backend from env: Vertex when
+            # GOOGLE_GENAI_USE_VERTEXAI=1 (ADC), else the Gemini Developer API
+            # via GOOGLE_API_KEY. (Per the Live API quickstart — no v1beta needed.)
             self._client = genai.Client()
         config = {
             "response_modalities": ["TEXT"],
