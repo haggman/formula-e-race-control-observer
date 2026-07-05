@@ -23,24 +23,32 @@
   #pauseTag{display:none;font-size:12px;font-weight:800;letter-spacing:1px;
             padding:3px 10px;border-radius:12px;background:var(--sc);color:#2a0000}
   #pauseTag.on{display:inline-block}
+  /* track-condition pill — reflects the flag the official has deployed */
+  #cond{font-size:12px;font-weight:800;letter-spacing:.5px;padding:3px 11px;border-radius:12px;
+        border:1px solid var(--edge);color:var(--green)}
+  #cond.GREEN{background:var(--green);color:#0c2a18;border-color:transparent}
+  #cond.DOUBLE_YELLOW{background:var(--dbl);color:#221800;border-color:transparent}
+  #cond.SAFETY_CAR{background:var(--sc);color:#2a0000;border-color:transparent}
   .clock{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--dim)}
   .clock b{color:var(--ink);font-size:16px}
   #banner{padding:6px 16px;font-weight:700;text-align:center;display:none}
 
-  /* three full-height columns: telemetry | center(map+recs) | video */
+  /* left half = map (top) + two worker agents (below); right half = Race Control */
   .wrap{flex:1 1 auto;min-height:0;display:grid;
-        grid-template-columns:1fr 1.7fr 1fr;gap:10px;padding:10px}
-  .center{display:flex;flex-direction:column;gap:10px;min-height:0}
-  .map{flex:1 1 44%;min-height:0;background:var(--panel);border:1px solid var(--edge);
+        grid-template-columns:1fr 1fr;gap:10px;padding:10px}
+  .left{display:flex;flex-direction:column;gap:10px;min-height:0}
+  .map{flex:1 1 55%;min-height:0;background:var(--panel);border:1px solid var(--edge);
        border-radius:10px;overflow:hidden}
   .map svg{width:100%;height:100%;display:block}
+  .agents{flex:1 1 45%;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .col{background:var(--panel);border:1px solid var(--edge);border-radius:10px;
        display:flex;flex-direction:column;min-height:0}
-  .center>.col{flex:1 1 56%}
   .col h2{margin:0;padding:9px 12px;font-size:12px;letter-spacing:1px;text-transform:uppercase;
           border-bottom:1px solid var(--edge);color:var(--dim)}
   .col.tele h2{color:var(--tele)} .col.video h2{color:var(--video)}
-  .col.recs h2{color:var(--ink)}
+  .col.recs h2{color:var(--ink);font-size:13px}
+  /* Race Control is the decision surface — give its cards a bit more presence */
+  .col.recs .feed{gap:9px;padding:11px}
   .feed{overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px}
   .item{background:var(--panel2);border:1px solid var(--edge);border-left:3px solid var(--edge);
         border-radius:6px;padding:6px 9px;font-size:12.5px}
@@ -93,20 +101,23 @@
 <body>
 <header>
   <span id="live" class="dot"></span><h1>FORMULA E · RACE CONTROL</h1>
+  <span id="cond" class="GREEN">● GREEN</span>
   <span id="pauseTag">⏸ PAUSED</span>
   <span class="clock">RACE <b id="clock">—</b></span>
 </header>
 <div id="banner"></div>
 
 <div class="wrap">
-  <div class="col tele"><h2>▸ Telemetry Agent</h2><div class="feed" id="teleFeed"></div></div>
-  <div class="center">
+  <div class="left">
     <div class="map">
       <svg id="svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
-    <div class="col recs"><h2>◆ Race Control — Recommendations</h2><div class="feed" id="recs"></div></div>
+    <div class="agents">
+      <div class="col tele"><h2>▸ Telemetry Agent</h2><div class="feed" id="teleFeed"></div></div>
+      <div class="col video"><h2>▸ Video Agent</h2><div class="feed" id="videoFeed"></div></div>
+    </div>
   </div>
-  <div class="col video"><h2>▸ Video Agent</h2><div class="feed" id="videoFeed"></div></div>
+  <div class="col recs"><h2>◆ Race Control — Recommendations</h2><div class="feed" id="recs"></div></div>
 </div>
 
 <div class="bar">
@@ -162,43 +173,64 @@ async function initMap(){
 }
 
 // ---- feeds ----
-function addFeed(id,cls,meta,body){
-  const f=document.getElementById(id);const d=document.createElement('div');d.className='item';
+function addFeed(id,cls,meta,body,ts){
+  const f=document.getElementById(id);
+  const d=document.createElement('div');d.className='item';d.dataset.ts=ts||'';
   d.innerHTML=`<div class="meta">${meta}</div>${body}`;
-  f.prepend(d); while(f.children.length>40)f.lastChild.remove();
+  // insert in timestamp order (newest on top) so near-simultaneous arrivals can't
+  // land out of order — place before the first item with an older timestamp
+  let ref=null;
+  for(const ch of f.children){ if((ch.dataset.ts||'')<d.dataset.ts){ref=ch;break;} }
+  f.insertBefore(d,ref);
+  while(f.children.length>40)f.lastChild.remove();
 }
 function onObservation(o){
   const t=o.ts_utc.substr(11,8);
   if(o.modality==='telemetry'){
     addFeed('teleFeed','tele',`${t} · car ${o.car_number??'?'} · sev ${o.severity}`,
-      `${o.signal.replace(/_/g,' ')} — ${o.summary}`);
+      `${o.signal.replace(/_/g,' ')} — ${o.summary}`,o.ts_utc);
   }else{
-    addFeed('videoFeed','video',`${t} · ${o.camera_id||'cam'} · sev ${o.severity}`, o.summary);
+    addFeed('videoFeed','video',`${t} · ${o.camera_id||'cam'} · sev ${o.severity}`,o.summary,o.ts_utc);
   }
 }
 
 // ---- incidents / recommendations ----
-function onIncident(p){
+const lastPayload={}, decided={};   // id -> last payload ; id -> approved(bool)
+
+function renderCard(p){
   const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
   const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
   const kind=p.kind||'NEW';
-  // recommendation card (create or update in place)
   let card=recEls[id];
   if(!card){card=document.createElement('div');recEls[id]=card;
             document.getElementById('recs').prepend(card);}
-  card.className='rec '+flag+(inc.approved?' approved':'');
+  card.dataset.flag=flag; card.dataset.cars=cars||'incident';
+  // decision state: a local click wins; else fall back to Firestore's inc.approved
+  const dec=(id in decided)?decided[id]
+           :(inc.approved===true?true:inc.approved===false?false:undefined);
+  card.className='rec '+flag+(dec!==undefined?' approved':'');
+  const tail = dec===true
+      ?`<div class="decided" style="color:var(--green)">✓ APPROVED — ${flag.replace(/_/g,' ')} deployed</div>`
+    : dec===false
+      ?`<div class="decided" style="color:#ff9a9a">✕ rejected — no flag deployed</div>`
+      :`<div class="btns"><button class="btn ok" onclick="decide('${id}','approve')">Approve — deploy ${flag.replace(/_/g,' ')}</button>`+
+       `<button class="btn no" onclick="decide('${id}','reject')">Reject</button></div>`;
   card.innerHTML=
     `<div class="top"><span class="flag ${flag}">${flag.replace(/_/g,' ')}</span>`+
     `<span class="kind ${kind}">${kind}</span>`+
     (inc.corroborated?`<span class="corr">✓ corroborated by video</span>`:``)+
     `</div><div><b>${cars||'incident'}</b> — ${r.headline.replace(/^\[.*?\]\s*/,'')}</div>`+
-    `<div class="narr">${r.narrative}</div>`+
-    (inc.approved===true?`<div class="decided" style="color:var(--green)">✓ APPROVED — flag deployed</div>`:
-     inc.approved===false?`<div class="decided" style="color:#ff9a9a">✕ rejected</div>`:
-     `<div class="btns"><button class="btn ok" onclick="decide('${id}','approve')">Approve — deploy ${flag.replace(/_/g,' ')}</button>`+
-     `<button class="btn no" onclick="decide('${id}','reject')">Reject</button></div>`);
-  // banner (live beats only — skip stale Firestore snapshots on reconnect)
-  if(kind!=='SNAPSHOT'){
+    `<div class="narr">${r.narrative}</div>`+tail;
+}
+
+function onIncident(p){
+  const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
+  const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
+  const kind=p.kind||'NEW';
+  lastPayload[id]=p;
+  renderCard(p);
+  // banner: live beats only — skip stale snapshots, and don't stomp a deployed flag
+  if(kind!=='SNAPSHOT' && !(id in decided)){
     const ban=document.getElementById('banner');
     ban.style.display='block'; ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)';
     ban.style.color='#160000';
@@ -242,7 +274,27 @@ async function jump(t,btn){
 }
 async function speed(m){await fetch('/control/speed',{method:'POST',
   headers:{'content-type':'application/json'},body:JSON.stringify({multiplier:m})});pollStatus();}
-async function decide(id,d){await fetch(`/incident/${id}/${d}`,{method:'POST'});}
+async function decide(id,d){
+  applyDecision(id, d==='approve');                       // instant, optimistic feedback
+  try{await fetch(`/incident/${id}/${d}`,{method:'POST'});}catch(e){}
+}
+// Close the loop: mark the card decided, and on approval put the flag "out" —
+// set the track-condition pill + banner so the whole board shows the new state.
+function applyDecision(id,approved){
+  if(decided[id]===approved) return;                      // idempotent (WS echo)
+  decided[id]=approved;
+  if(lastPayload[id]) renderCard(lastPayload[id]);
+  const card=recEls[id];
+  if(approved && card) setCondition(card.dataset.flag, card.dataset.cars);
+}
+function setCondition(flag,cars){
+  const c=document.getElementById('cond');
+  c.className=flag; c.textContent='● '+flag.replace(/_/g,' ');
+  const ban=document.getElementById('banner');
+  ban.style.display='block';
+  ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)'; ban.style.color='#160000';
+  ban.textContent=`${flag.replace(/_/g,' ')} DEPLOYED — ${cars}`;
+}
 
 // ---- sim status → reflect pause/speed state on the controls ----
 function applyStatus(s){
@@ -267,7 +319,7 @@ function connect(){
     if(m.type==='observation')onObservation(m.data);
     else if(m.type==='incident')onIncident(m.data);
     else if(m.type==='cars')onCars(m);
-    else if(m.type==='decision'){const c=recEls[m.incident_id];if(c){/* refreshed on next incident tick */}}
+    else if(m.type==='decision'){applyDecision(m.incident_id, m.approved);}
   };
   setInterval(()=>{try{ws.send('ping')}catch(e){}},15000);
 }
