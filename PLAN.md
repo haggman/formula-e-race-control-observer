@@ -413,6 +413,22 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   Also switched to `gemini-3.5-flash` on the GLOBAL Vertex endpoint (regional 404'd)
   via the shared `make_client()` helper. Offline-validated window + scratchpad.
 
+- **2026-07-05 (correlator wired — full pipeline)** — Wired both observers into
+  the correlator via a Pub/Sub **observation bus** (`shared/observation_bus.py`,
+  topic `fe-observations`). Observers get a `--publish` flag; the
+  **`correlator/service.py`** runtime subscribes (seek-to-now), buffers recent
+  Observations (evicted on their own race-time timeline, not wall-clock), fuses
+  every 2s, and ANNOUNCES an incident when it's NEW or ESCALATES — drafting the
+  report and writing it to Firestore `incidents/` for the console. Escalation
+  validated offline: a telemetry-only stop → **DOUBLE YELLOW (new)**, then video
+  corroboration → **SAFETY CAR (escalation)**, repeats deduped. Dedup key = cars +
+  30s bucket (NOT turn/location, which fill in late). Known edge: if video misreads
+  the car number differently from telemetry, the escalation shows as a second NEW
+  announcement rather than an escalation — fine functionally (still recommends SC);
+  a fuller incident-tracker is a later refinement. Report narrative is the only
+  Gemini touch and fires only on new/escalated incidents (cheap). **All three
+  agents now run and fuse end to end.**
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging
@@ -427,9 +443,9 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
 - [x] setup/ install ladder — activate.sh + 5 numbered steps + all.sh + verify (green-light check), borrowed from Ch2
 - [x] Agent lifecycle (shared/lifecycle.py) — deadman timeout / graceful stop / idle watchdog (the 'never 24/7' guarantee)
 - [x] Telemetry observer as a stream consumer (subscribe fe-telemetry, seek-to-now → detector → Observations); validated offline
-- [ ] Video feeder (clock-paced replay of prebuilt mosaic → video observer)
-- [ ] A2A wiring (observers as services → correlator as RemoteA2aAgent)
-- [ ] Race Control console (frontend, one-click approve/reject)
+- [x] Video observer (clock-gated, generate_content on Vertex global, 10s window + scratchpad memory) — WORKING live
+- [x] Observation bus (Pub/Sub fe-observations) + observers `--publish` + correlator service (subscribe→fuse→announce escalations→Firestore incidents/) — escalation validated offline
+- [ ] Race Control console (frontend, one-click approve/reject; reads Firestore incidents/) + incident jump-buttons
 - [ ] setup/ ladder (numbered scripts + all.sh + verify) — borrow Ch2
 - [ ] Docs (STUDENT_GUIDE, RUN_OF_SHOW, HOW_IT_WORKS, DEMO, architecture.svg)
 

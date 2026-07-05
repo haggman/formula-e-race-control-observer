@@ -173,9 +173,16 @@ def main() -> int:
                     help="optional deadman cap seconds; 0 = no cap (default)")
     ap.add_argument("--idle-timeout", type=float, default=45.0,
                     help="clock gate: stop after this many quiet seconds")
+    ap.add_argument("--publish", action="store_true",
+                    help="also publish Observations to the fe-observations bus (for the correlator)")
     args = ap.parse_args()
+    emit = _emit_print
+    if args.publish:
+        from shared.observation_bus import make_emit
+        emit = make_emit(also=_emit_print)
     reason = run(topic=args.topic, subscription=args.subscription,
-                 max_runtime_s=(args.max_runtime or None), idle_timeout_s=args.idle_timeout)
+                 max_runtime_s=(args.max_runtime or None), idle_timeout_s=args.idle_timeout,
+                 emit=emit)
     logger.info("stopped (%s)", reason)
     return 0
 

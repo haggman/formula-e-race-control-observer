@@ -29,6 +29,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
@@ -116,6 +117,7 @@ class VideoObserver:
         self._active = False            # True while watching (clock advancing)
         self._last_processed = -1       # last race-second sent to the model
         self._recent: deque = deque(maxlen=scratchpad_n)  # rolling report memory
+        self._reports = 0               # count of incidents emitted (for heartbeat)
 
     def _ensure_client(self) -> None:
         if self._client is None:
@@ -154,11 +156,13 @@ class VideoObserver:
             self._recent.append(
                 f"{obs.ts_utc:%H:%M:%S} [{obs.location.camera_id}] "
                 f"{obs.summary} (sev {obs.severity_hint})")
+            self._reports += 1
             self.emit(obs)
 
     # -- the clock-gated loop ------------------------------------------------
     async def run(self, session: Session) -> str:
         self._ensure_client()
+        last_hb = 0.0
         while session.active():
             sample = self.clock.read()
             advancing = sample.reachable and self.clock.is_advancing()
@@ -176,6 +180,13 @@ class VideoObserver:
             session.touch()
 
             now_s = int(sample.race_time_s)
+            # Heartbeat so a quiet (no-incident) stretch is never mistaken for a
+            # hang — shows it's alive, the race-time it's watching, and the count.
+            if time.monotonic() - last_hb >= 12:
+                logger.info("watching race_time %s — %d incident(s) reported so far",
+                            (GREEN_FLAG + timedelta(seconds=now_s)).strftime("%H:%M:%S"),
+                            self._reports)
+                last_hb = time.monotonic()
             # Sliding window: each call looks at the last window_s seconds up to
             # NOW (overlapping consecutive calls for temporal continuity). We
             # anchor on 'now', so a startup or /jump skips straight to the present
@@ -232,6 +243,8 @@ def main() -> int:
     ap.add_argument("--max-runtime", type=float, default=600.0, help="deadman backstop seconds")
     ap.add_argument("--window", type=int, default=WINDOW_S,
                     help="seconds of frames to send per call (sliding window)")
+    ap.add_argument("--publish", action="store_true",
+                    help="also publish Observations to the fe-observations bus (for the correlator)")
     args = ap.parse_args()
     if not args.sim_url:
         ap.error("--sim-url (or SIM_URL) required")
@@ -245,7 +258,11 @@ def main() -> int:
     def show(o: Observation) -> None:
         print(f"  {o.ts_utc:%H:%M:%S} [{o.signal.value:<22}] cam={o.location.camera_id} "
               f"conf={o.confidence:.2f} sev={o.severity_hint:>3}  {o.summary}")
-    observer.emit = show
+    if args.publish:
+        from shared.observation_bus import make_emit
+        observer.emit = make_emit(also=show)
+    else:
+        observer.emit = show
 
     # install_signals=False: the async runner installs asyncio-native handlers
     # instead (so Ctrl-C cancels the in-flight call immediately). Deadman backstop
