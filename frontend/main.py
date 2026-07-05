@@ -222,6 +222,22 @@ async def speed(body: dict):
     return await _sim_post("/speed", {"multiplier": body.get("multiplier", 1.0)})
 
 
+# --- clear the board (wipe stale incidents so snapshots don't resurrect) ---
+@app.post("/incidents/clear")
+async def clear_incidents():
+    try:
+        from google.cloud import firestore
+        db = firestore.Client(project=PROJECT_ID)
+        n = 0
+        for d in db.collection("incidents").stream():
+            d.reference.delete()
+            n += 1
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    _push({"type": "cleared"})
+    return {"ok": True, "deleted": n}
+
+
 # --- one-click approve / reject -------------------------------------------
 @app.post("/incident/{incident_id}/{decision}")
 async def decide(incident_id: str, decision: str):

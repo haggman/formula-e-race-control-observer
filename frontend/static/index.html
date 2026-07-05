@@ -56,7 +56,8 @@
   .col.tele .item{border-left-color:var(--tele)} .col.video .item{border-left-color:var(--video)}
   /* recommendation cards */
   .rec{background:var(--panel2);border:1px solid var(--edge);border-radius:8px;padding:10px;
-       border-left:5px solid var(--edge)}
+       border-left:5px solid var(--edge);transition:opacity .28s ease,transform .28s ease}
+  .rec.gone{opacity:0;transform:translateY(-8px)}
   .rec.DOUBLE_YELLOW{border-left-color:var(--dbl)} .rec.SAFETY_CAR{border-left-color:var(--sc)}
   .rec.YELLOW{border-left-color:var(--yellow)}
   .rec .top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
@@ -124,9 +125,9 @@
   <span class="lbl">Jump to</span><span class="grp" id="jumpBtns"></span>
   <span class="sep"></span>
   <span class="grp">
-    <button class="cbtn" id="btnPause" onclick="ctl('pause')">⏸ Pause</button>
-    <button class="cbtn" id="btnResume" onclick="ctl('resume')">▶ Resume</button>
-    <button class="cbtn" onclick="ctl('restart')">⟲ Restart</button>
+    <button class="cbtn" id="btnToggle" onclick="togglePlay()">⏸ Pause</button>
+    <button class="cbtn" id="btnClear" onclick="clearBoard()">⌫ Clear</button>
+    <button class="cbtn" onclick="restart()">⟲ Restart</button>
   </span>
   <span class="sep"></span>
   <span class="grp"><span class="lbl">Speed</span>
@@ -177,12 +178,14 @@ function addFeed(id,cls,meta,body,ts){
   const f=document.getElementById(id);
   const d=document.createElement('div');d.className='item';d.dataset.ts=ts||'';
   d.innerHTML=`<div class="meta">${meta}</div>${body}`;
-  // insert in timestamp order (newest on top) so near-simultaneous arrivals can't
-  // land out of order — place before the first item with an older timestamp
+  // log-tail: keep chronological order and land the newest at the BOTTOM — insert
+  // before the first item with a LATER timestamp (guards near-simultaneous arrivals)
+  const atBottom=f.scrollHeight-f.scrollTop-f.clientHeight<40;
   let ref=null;
-  for(const ch of f.children){ if((ch.dataset.ts||'')<d.dataset.ts){ref=ch;break;} }
+  for(const ch of f.children){ if((ch.dataset.ts||'')>d.dataset.ts){ref=ch;break;} }
   f.insertBefore(d,ref);
-  while(f.children.length>40)f.lastChild.remove();
+  while(f.children.length>60)f.firstChild.remove();      // trim the oldest (top)
+  if(atBottom)f.scrollTop=f.scrollHeight;                // follow the latest
 }
 function onObservation(o){
   const t=o.ts_utc.substr(11,8);
@@ -195,7 +198,8 @@ function onObservation(o){
 }
 
 // ---- incidents / recommendations ----
-const lastPayload={}, decided={};   // id -> last payload ; id -> approved(bool)
+const lastPayload={}, decided={}, decidedRank={};   // id -> payload ; approved(bool) ; flag rank decided at
+const RANK={NONE:0,YELLOW:1,DOUBLE_YELLOW:2,SAFETY_CAR:3,RED:4};
 
 function renderCard(p){
   const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
@@ -227,6 +231,15 @@ function onIncident(p){
   const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
   const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
   const kind=p.kind||'NEW';
+  const rk=RANK[flag]??0;
+  // NONE = "note and monitor", not a flag — keep it off the decision surface entirely
+  if(flag==='NONE') return;
+  // Already decided at this level (or higher)? Stay quiet. A genuine escalation
+  // ABOVE the decided level reopens the incident for a fresh decision.
+  if(id in decidedRank){
+    if(rk<=decidedRank[id]) return;
+    delete decidedRank[id]; delete decided[id];   // escalated → reopen
+  }
   lastPayload[id]=p;
   renderCard(p);
   // banner: live beats only — skip stale snapshots, and don't stomp a deployed flag
@@ -240,7 +253,7 @@ function onIncident(p){
   if(inc.location && inc.location.gps_lat!=null){
     const [x,y]=gpsXY(inc.location.gps_lat,inc.location.gps_lng);
     const svg=document.getElementById('svg'); let m=incEls[id];
-    if(!m){m=el('g',{}); incEls[id]=m; svg.appendChild(m);
+    if(!m){m=el('g',{class:'inc-g'}); incEls[id]=m; svg.appendChild(m);
       m.appendChild(el('circle',{cx:x,cy:y,r:6,class:'inc'}));
       const p=el('circle',{cx:x,cy:y,r:6,fill:'none',stroke:'',class:'ping'});
       p.style.animation='pulse 1.4s ease-out infinite'; m.appendChild(p);}
@@ -268,6 +281,7 @@ function onCars(m){
 async function ctl(p){await fetch('/control/'+p,{method:'POST'});pollStatus();}
 async function jump(t,btn){
   if(btn){jumpEls.forEach(b=>b.classList.remove('active'));btn.classList.add('active');activeJump=btn;}
+  resetBoard();                          // fresh slate for the new scenario
   await fetch('/control/jump',{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});
   pollStatus();
@@ -278,15 +292,29 @@ async function decide(id,d){
   applyDecision(id, d==='approve');                       // instant, optimistic feedback
   try{await fetch(`/incident/${id}/${d}`,{method:'POST'});}catch(e){}
 }
-// Close the loop: mark the card decided, and on approval put the flag "out" —
-// set the track-condition pill + banner so the whole board shows the new state.
+// Close the loop: clear the card from the queue, and on approval put the flag
+// "out" — set the track-condition pill + banner so the whole board shows the state.
 function applyDecision(id,approved){
-  if(decided[id]===approved) return;                      // idempotent (WS echo)
-  decided[id]=approved;
-  if(lastPayload[id]) renderCard(lastPayload[id]);
+  if(id in decidedRank) return;                           // already decided (idempotent WS echo)
   const card=recEls[id];
-  if(approved && card) setCondition(card.dataset.flag, card.dataset.cars);
+  const flag=card?card.dataset.flag:'NONE', cars=card?card.dataset.cars:'';
+  decided[id]=approved; decidedRank[id]=RANK[flag]??0;
+  if(approved) setCondition(flag,cars);
+  if(card){ card.classList.add('gone');                   // fade out, then drop from the queue
+    setTimeout(()=>card.remove(),280); }
+  delete recEls[id];                                      // so a later escalation makes a fresh card
 }
+// Reset the visible board for a fresh scenario (does not touch the sim).
+function resetBoard(){
+  Object.values(recEls).forEach(c=>c.remove());
+  [recEls,lastPayload,decided,decidedRank,incEls].forEach(o=>{for(const k in o)delete o[k];});
+  document.querySelectorAll('#svg .inc-g').forEach(m=>m.remove());
+  document.querySelectorAll('.cam.hot').forEach(c=>c.classList.remove('hot'));
+  document.getElementById('banner').style.display='none';
+  const cond=document.getElementById('cond'); cond.className='GREEN'; cond.textContent='● GREEN';
+}
+async function clearBoard(){ resetBoard(); try{await fetch('/incidents/clear',{method:'POST'});}catch(e){} }
+async function restart(){ resetBoard(); try{await fetch('/incidents/clear',{method:'POST'});}catch(e){} await ctl('restart'); }
 function setCondition(flag,cars){
   const c=document.getElementById('cond');
   c.className=flag; c.textContent='● '+flag.replace(/_/g,' ');
@@ -297,15 +325,18 @@ function setCondition(flag,cars){
 }
 
 // ---- sim status → reflect pause/speed state on the controls ----
+let simPaused=false;
 function applyStatus(s){
-  const paused=!!s.paused;
-  document.getElementById('pauseTag').classList.toggle('on',paused);
-  document.getElementById('btnPause').classList.toggle('paused',paused);
-  document.getElementById('btnResume').classList.toggle('active',!paused);
+  simPaused=!!s.paused;
+  document.getElementById('pauseTag').classList.toggle('on',simPaused);
+  const t=document.getElementById('btnToggle');           // one toggle: Pause ⇄ Resume
+  t.textContent=simPaused?'▶ Resume':'⏸ Pause';
+  t.classList.toggle('paused',simPaused);
   const mult=Math.round(s.speed_multiplier||1);
   document.getElementById('spd1').classList.toggle('active',mult<=1);
   document.getElementById('spd2').classList.toggle('active',mult>=2);
 }
+async function togglePlay(){ await ctl(simPaused?'resume':'pause'); }
 async function pollStatus(){
   try{const s=await (await fetch('/control/status')).json();applyStatus(s);}catch(e){}
 }
@@ -320,6 +351,7 @@ function connect(){
     else if(m.type==='incident')onIncident(m.data);
     else if(m.type==='cars')onCars(m);
     else if(m.type==='decision'){applyDecision(m.incident_id, m.approved);}
+    else if(m.type==='cleared'){resetBoard();}
   };
   setInterval(()=>{try{ws.send('ping')}catch(e){}},15000);
 }
