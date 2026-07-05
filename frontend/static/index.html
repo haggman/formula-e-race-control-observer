@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formula E — Race Control</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#131a22; --panel2:#0f151c; --edge:#243040;
+    --ink:#e7edf3; --dim:#8aa0b4; --tele:#4aa3ff; --video:#c07cff;
+    --yellow:#ffd23f; --dbl:#ff9e2c; --sc:#ff4d4d; --green:#39d98a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:10px 16px;
+         background:var(--panel2);border-bottom:1px solid var(--edge)}
+  header h1{font-size:16px;margin:0;letter-spacing:.5px;font-weight:700}
+  header .dot{width:9px;height:9px;border-radius:50%;background:#555;display:inline-block;margin-right:6px}
+  header .dot.live{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .clock{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--dim)}
+  .clock b{color:var(--ink);font-size:16px}
+  #banner{padding:6px 16px;font-weight:700;text-align:center;display:none}
+  .wrap{display:grid;grid-template-columns:1fr;gap:10px;padding:10px}
+  .map{background:var(--panel);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+  .cols{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:10px}
+  .col{background:var(--panel);border:1px solid var(--edge);border-radius:10px;
+       display:flex;flex-direction:column;min-height:280px;max-height:44vh}
+  .col h2{margin:0;padding:9px 12px;font-size:12px;letter-spacing:1px;text-transform:uppercase;
+          border-bottom:1px solid var(--edge);color:var(--dim)}
+  .col.tele h2{color:var(--tele)} .col.video h2{color:var(--video)}
+  .feed{overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px}
+  .item{background:var(--panel2);border:1px solid var(--edge);border-left:3px solid var(--edge);
+        border-radius:6px;padding:6px 9px;font-size:12.5px}
+  .item .meta{color:var(--dim);font-size:11px;display:flex;gap:8px;margin-bottom:2px}
+  .col.tele .item{border-left-color:var(--tele)} .col.video .item{border-left-color:var(--video)}
+  /* recommendation cards */
+  .rec{background:var(--panel2);border:1px solid var(--edge);border-radius:8px;padding:10px;
+       border-left:5px solid var(--edge)}
+  .rec.DOUBLE_YELLOW{border-left-color:var(--dbl)} .rec.SAFETY_CAR{border-left-color:var(--sc)}
+  .rec.YELLOW{border-left-color:var(--yellow)}
+  .rec .top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .flag{font-weight:800;letter-spacing:.5px;padding:2px 8px;border-radius:5px;font-size:12px}
+  .flag.DOUBLE_YELLOW{background:var(--dbl);color:#221800}
+  .flag.SAFETY_CAR{background:var(--sc);color:#2a0000}
+  .flag.YELLOW{background:var(--yellow);color:#221d00}
+  .kind{font-size:10px;letter-spacing:1px;color:var(--dim);border:1px solid var(--edge);
+        padding:1px 6px;border-radius:10px}
+  .kind.ESCALATION{color:var(--sc);border-color:var(--sc)}
+  .corr{margin-left:auto;font-size:11px;color:var(--green);font-weight:700}
+  .rec .narr{color:#c7d4e0;font-size:12.5px;margin:5px 0 8px}
+  .btns{display:flex;gap:8px}
+  .btn{flex:1;padding:7px;border-radius:6px;border:1px solid var(--edge);cursor:pointer;
+       font-weight:700;background:#1b2530;color:var(--ink)}
+  .btn.ok{background:#16351f;border-color:#1f6b3a;color:var(--green)}
+  .btn.no{background:#331717;border-color:#6b1f1f;color:#ff9a9a}
+  .rec.approved{opacity:.75} .rec.approved .btns{display:none}
+  .decided{font-weight:700;font-size:12px;margin-top:4px}
+  /* controls */
+  .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;
+       background:var(--panel2);border-top:1px solid var(--edge)}
+  .bar .grp{display:flex;gap:6px;align-items:center}
+  .bar .lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-right:2px}
+  .cbtn{padding:6px 11px;border-radius:6px;border:1px solid var(--edge);background:#1b2530;
+        color:var(--ink);cursor:pointer;font-size:12.5px;font-weight:600}
+  .cbtn:hover{border-color:#3a536b}
+  .cbtn.jump{background:#17222e}
+  .sep{width:1px;height:22px;background:var(--edge);margin:0 4px}
+  /* map bits */
+  text{fill:var(--dim);font-size:9px}
+  .cam{fill:#37475a} .cam.hot{fill:var(--green)}
+  .car{fill:#5b6b7d} .car.retired{fill:#324055}
+  .inc{fill:var(--dbl)}
+  @keyframes pulse{0%{r:6;opacity:1}100%{r:20;opacity:0}}
+</style>
+</head>
+<body>
+<header>
+  <span id="live" class="dot"></span><h1>FORMULA E · RACE CONTROL</h1>
+  <span class="clock">RACE <b id="clock">—</b></span>
+</header>
+<div id="banner"></div>
+
+<div class="wrap">
+  <div class="map">
+    <svg id="svg" viewBox="0 0 1000 620" width="100%" style="display:block"></svg>
+  </div>
+  <div class="cols">
+    <div class="col tele"><h2>▸ Telemetry Agent</h2><div class="feed" id="teleFeed"></div></div>
+    <div class="col"><h2>◆ Race Control — Recommendations</h2><div class="feed" id="recs"></div></div>
+    <div class="col video"><h2>▸ Video Agent</h2><div class="feed" id="videoFeed"></div></div>
+  </div>
+</div>
+
+<div class="bar">
+  <span class="lbl">Jump to</span><span class="grp" id="jumpBtns"></span>
+  <span class="sep"></span>
+  <span class="grp">
+    <button class="cbtn" onclick="ctl('pause')">⏸ Pause</button>
+    <button class="cbtn" onclick="ctl('resume')">▶ Resume</button>
+    <button class="cbtn" onclick="ctl('restart')">⟲ Restart</button>
+  </span>
+  <span class="sep"></span>
+  <span class="grp"><span class="lbl">Speed</span>
+    <button class="cbtn" onclick="speed(1)">1×</button>
+    <button class="cbtn" onclick="speed(2)">2×</button>
+  </span>
+</div>
+
+<script>
+const GREEN_FLAG = Date.UTC(2024,4,12,13,4,0)/1000;   // race_time_s = 0
+let geom=null, B=null;
+const carEls={}, incEls={}, recEls={};
+
+function gpsXY(lat,lng){
+  return [B.pad+(lng-B.lng_min)/(B.lng_max-B.lng_min)*(B.w-2*B.pad),
+          B.pad+(B.lat_max-lat)/(B.lat_max-B.lat_min)*(B.h-2*B.pad)];
+}
+function el(tag,attrs){const e=document.createElementNS('http://www.w3.org/2000/svg',tag);
+  for(const k in attrs)e.setAttribute(k,attrs[k]);return e;}
+function fmtClock(s){if(s==null)return '—';const d=new Date((GREEN_FLAG+s)*1000);
+  return d.toISOString().substr(11,8);}
+
+async function initMap(){
+  geom=await (await fetch('/static/track_geometry.json')).json();
+  B=geom.bounds; const svg=document.getElementById('svg');
+  // outline
+  svg.appendChild(el('polyline',{points:geom.outline.map(p=>p.join(',')).join(' '),
+    fill:'none',stroke:'#3a4859','stroke-width':6,'stroke-linejoin':'round'}));
+  svg.appendChild(el('polyline',{points:geom.outline.map(p=>p.join(',')).join(' '),
+    fill:'none',stroke:'#223040','stroke-width':2}));
+  // cameras
+  geom.cameras.forEach(c=>{
+    const g=el('g',{}); const s=el('rect',{x:c.x-4,y:c.y-4,width:8,height:8,rx:2,class:'cam'});
+    s.id='cam_'+c.id; g.appendChild(s); svg.appendChild(g);
+  });
+  // jump buttons
+  const jb=document.getElementById('jumpBtns');
+  geom.incidents.forEach(i=>{const b=document.createElement('button');
+    b.className='cbtn jump';b.textContent=i.label;b.title=i.note||'';
+    b.onclick=()=>jump(i.race_time_s);jb.appendChild(b);});
+}
+
+// ---- feeds ----
+function addFeed(id,cls,meta,body){
+  const f=document.getElementById(id);const d=document.createElement('div');d.className='item';
+  d.innerHTML=`<div class="meta">${meta}</div>${body}`;
+  f.prepend(d); while(f.children.length>40)f.lastChild.remove();
+}
+function onObservation(o){
+  const t=o.ts_utc.substr(11,8);
+  if(o.modality==='telemetry'){
+    addFeed('teleFeed','tele',`${t} · car ${o.car_number??'?'} · sev ${o.severity}`,
+      `${o.signal.replace(/_/g,' ')} — ${o.summary}`);
+  }else{
+    addFeed('videoFeed','video',`${t} · ${o.camera_id||'cam'} · sev ${o.severity}`, o.summary);
+  }
+}
+
+// ---- incidents / recommendations ----
+function onIncident(p){
+  const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
+  const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
+  const kind=p.kind||'NEW';
+  // recommendation card (create or update in place)
+  let card=recEls[id];
+  if(!card){card=document.createElement('div');recEls[id]=card;
+            document.getElementById('recs').prepend(card);}
+  card.className='rec '+flag+(inc.approved?' approved':'');
+  card.innerHTML=
+    `<div class="top"><span class="flag ${flag}">${flag.replace(/_/g,' ')}</span>`+
+    `<span class="kind ${kind}">${kind}</span>`+
+    (inc.corroborated?`<span class="corr">✓ corroborated by video</span>`:``)+
+    `</div><div><b>${cars||'incident'}</b> — ${r.headline.replace(/^\[.*?\]\s*/,'')}</div>`+
+    `<div class="narr">${r.narrative}</div>`+
+    (inc.approved===true?`<div class="decided" style="color:var(--green)">✓ APPROVED — flag deployed</div>`:
+     inc.approved===false?`<div class="decided" style="color:#ff9a9a">✕ rejected</div>`:
+     `<div class="btns"><button class="btn ok" onclick="decide('${id}','approve')">Approve — deploy ${flag.replace(/_/g,' ')}</button>`+
+     `<button class="btn no" onclick="decide('${id}','reject')">Reject</button></div>`);
+  // banner
+  const ban=document.getElementById('banner');
+  ban.style.display='block'; ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)';
+  ban.style.color='#160000';
+  ban.textContent=`${kind}: ${cars} — RECOMMEND ${flag.replace(/_/g,' ')}`+(inc.corroborated?' · CORROBORATED':'');
+  // map marker + camera highlight
+  if(inc.location && inc.location.gps_lat!=null){
+    const [x,y]=gpsXY(inc.location.gps_lat,inc.location.gps_lng);
+    const svg=document.getElementById('svg'); let m=incEls[id];
+    if(!m){m=el('g',{}); incEls[id]=m; svg.appendChild(m);
+      m.appendChild(el('circle',{cx:x,cy:y,r:6,class:'inc'}));
+      const p=el('circle',{cx:x,cy:y,r:6,fill:'none',stroke:'',class:'ping'});
+      p.style.animation='pulse 1.4s ease-out infinite'; m.appendChild(p);}
+    const col=flag==='SAFETY_CAR'?'#ff4d4d':'#ff9e2c';
+    m.querySelector('.inc').setAttribute('fill',col);
+    m.querySelector('.ping').setAttribute('stroke',col);
+  }
+  if(inc.corroborated && inc.location && inc.location.camera_id){
+    const c=document.getElementById('cam_'+inc.location.camera_id);
+    if(c)c.classList.add('hot');
+  }
+}
+
+// ---- live cars ----
+function onCars(m){
+  document.getElementById('clock').textContent=fmtClock(m.race_time_s);
+  const svg=document.getElementById('svg');
+  (m.cars||[]).forEach(c=>{const [x,y]=gpsXY(c.lat,c.lng);let e=carEls[c.n];
+    if(!e){e=el('circle',{r:3.4,class:'car'});carEls[c.n]=e;svg.appendChild(e);}
+    e.setAttribute('cx',x);e.setAttribute('cy',y);
+    e.setAttribute('class','car'+(c.retired?' retired':''));});
+}
+
+// ---- controls ----
+async function ctl(p){await fetch('/control/'+p,{method:'POST'});}
+async function jump(t){await fetch('/control/jump',{method:'POST',
+  headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});}
+async function speed(m){await fetch('/control/speed',{method:'POST',
+  headers:{'content-type':'application/json'},body:JSON.stringify({multiplier:m})});}
+async function decide(id,d){await fetch(`/incident/${id}/${d}`,{method:'POST'});}
+
+// ---- websocket ----
+function connect(){
+  const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.onopen=()=>document.getElementById('live').classList.add('live');
+  ws.onclose=()=>{document.getElementById('live').classList.remove('live');setTimeout(connect,2000);};
+  ws.onmessage=e=>{const m=JSON.parse(e.data);
+    if(m.type==='observation')onObservation(m.data);
+    else if(m.type==='incident')onIncident(m.data);
+    else if(m.type==='cars')onCars(m);
+    else if(m.type==='decision'){const c=recEls[m.incident_id];if(c){/* refreshed on next incident tick */}}
+  };
+  setInterval(()=>{try{ws.send('ping')}catch(e){}},15000);
+}
+initMap().then(connect);
+</script>
+</body>
+</html>

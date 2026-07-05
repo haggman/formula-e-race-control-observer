@@ -66,6 +66,7 @@ class CorrelatorService:
         self._buf: deque[Observation] = deque()
         self._announced: dict[tuple, tuple[int, bool]] = {}   # key -> (flag rank, corroborated)
         self._db = None
+        self._incident_pub = None                             # set in run() → fe-incidents
 
     # -- ingest --------------------------------------------------------------
     def add(self, obs: Observation) -> None:
@@ -111,6 +112,11 @@ class CorrelatorService:
         print(f"  {report.headline}")
         print(f"  {report.narrative}")
         self._write_firestore(report)
+        if self._incident_pub:                 # → console (live)
+            try:
+                self._incident_pub.publish(kind, report)
+            except Exception as e:
+                logger.warning("incident publish skipped (%s)", e)
 
     def _write_firestore(self, report: IncidentReport) -> None:
         try:
@@ -133,6 +139,10 @@ def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
         raise RuntimeError("GOOGLE_CLOUD_PROJECT required")
 
     svc = CorrelatorService(use_llm=use_llm)
+    try:
+        svc._incident_pub = observation_bus.IncidentPublisher(project)
+    except Exception as e:
+        logger.warning("fe-incidents publisher unavailable (%s) — console live feed off", e)
 
     with Session(max_runtime_s=max_runtime_s, idle_timeout_s=idle_timeout_s,
                  name="correlator") as sess:

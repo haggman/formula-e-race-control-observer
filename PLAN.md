@@ -468,6 +468,23 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   clears the scratchpad on a backward jump. Both validated offline (play to 13:18
   → jump back to 685 → Günther stop + escalation detected on the new timeline).
 
+- **2026-07-05 (Race Control console)** — Built the UI. `shared/observation_bus.py`
+  gained a `fe-incidents` topic + `IncidentPublisher`; the correlator publishes each
+  NEW/ESCALATION/CONFIRMED beat there. `frontend/main.py` (FastAPI) subscribes to
+  fe-observations (two raw sensor feeds) + fe-incidents (recommendations) and polls
+  race_states for live cars, fanning all of it to the browser over one WebSocket;
+  it serves the console, proxies sim controls (jump = pause→jump→resume), and
+  records Approve/Reject to Firestore. `frontend/static/index.html` is the
+  single-file console: 3 columns (telemetry | recommendations+one-click approve |
+  video), a track map (real R10 outline from `track_geometry.json`, live car dots,
+  pulsing incident markers at reported GPS, camera markers that light up on
+  corroboration), and the control bar (jump buttons, pause/resume, speed, restart,
+  race clock). Previewed the layout with a scripted escalation. **Known refinement:
+  camera marker positions are index-approximate, so the lit camera can sit far from
+  the incident's true GPS marker — improve with surveyed/derived camera positions.**
+  Run: `uvicorn frontend.main:app --port 8080` + Web Preview; needs the observers +
+  correlator + sim running for live data.
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging
@@ -484,7 +501,9 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
 - [x] Telemetry observer as a stream consumer (subscribe fe-telemetry, seek-to-now → detector → Observations); validated offline
 - [x] Video observer (clock-gated, generate_content on Vertex global, 10s window + scratchpad memory) — WORKING live
 - [x] Observation bus (Pub/Sub fe-observations) + observers `--publish` + correlator service (subscribe→fuse→announce escalations→Firestore incidents/) — escalation validated offline
-- [ ] Race Control console (frontend, one-click approve/reject; reads Firestore incidents/) + incident jump-buttons
+- [x] Race Control console — FastAPI hub (subscribes both buses + polls race_states) → WebSocket → 3-column UI (telemetry | recommendations+approve/reject | video) + track map (outline, live cars, pulsing incidents, camera highlight) + control bar (jump/pause/resume/speed/restart). fe-incidents topic added.
+- [ ] Docs (STUDENT_GUIDE, RUN_OF_SHOW, HOW_IT_WORKS, DEMO, architecture.svg)
+- [ ] Carve out the student-build seam (which component students build in the lab)
 - [ ] setup/ ladder (numbered scripts + all.sh + verify) — borrow Ch2
 - [ ] Docs (STUDENT_GUIDE, RUN_OF_SHOW, HOW_IT_WORKS, DEMO, architecture.svg)
 

@@ -16,6 +16,28 @@ from shared.models import Observation
 logger = logging.getLogger("observation_bus")
 
 OBSERVATIONS_TOPIC = "fe-observations"
+INCIDENTS_TOPIC = "fe-incidents"    # correlator → console (fused recommendations)
+
+
+class IncidentPublisher:
+    """Publishes correlator incident updates (kind + IncidentReport) to the bus."""
+
+    def __init__(self, project: str | None = None, topic: str = INCIDENTS_TOPIC):
+        from google.cloud import pubsub_v1
+        from google.api_core import exceptions
+        self.project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        self._pub = pubsub_v1.PublisherClient()
+        self._topic_path = self._pub.topic_path(self.project, topic)
+        try:
+            self._pub.create_topic(name=self._topic_path)
+            logger.info("created topic %s", topic)
+        except exceptions.AlreadyExists:
+            pass
+
+    def publish(self, kind: str, report) -> None:
+        import json
+        payload = json.dumps({"kind": kind, "report": report.model_dump(mode="json")})
+        self._pub.publish(self._topic_path, payload.encode("utf-8"))
 
 
 class ObservationPublisher:
