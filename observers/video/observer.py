@@ -1,21 +1,21 @@
-"""Video Observer — the clock-gated Gemini Live observer (Agent 1).
+"""Video Observer — the clock-gated multimodal observer (Agent 1).
 
 Watches one 2x2 camera mosaic at ~1 frame/second, driven by the race clock, and
-emits video Observations for safety incidents. This is the one Gemini spender, so
-its lifecycle is the point:
+emits video Observations for safety incidents.
 
-  - CLOCK-GATED Live session. It holds a Gemini Live session ONLY while the
-    simulator's race_time_s is advancing. When the sim pauses or ends, it CLOSES
-    the session (token burn stops) and keeps polling cheaply; when the clock moves
-    again it reopens. So launching/pausing the simulator is the on/off switch.
-  - Deadman backstop (default 10 min) via the shared Session — the ultimate cap if
-    the UI dies without signalling. It does NOT idle-exit, so a brief pause won't
-    kill the process; the deadman + explicit SIGTERM are the only hard stops.
+Why multimodal generate_content and not the Live API: on Vertex the only GA Live
+model is audio-only ("Text output is not supported for native audio output
+model"), and we're staying on Vertex/ADC (no API key). A standard vision model
+(gemini-2.5-flash) does image-in / JSON-text-out, which is exactly our need — and
+it's simpler and cheaper to gate: there's no persistent session to hold open, so
+"pause Gemini when the sim pauses" is just "don't call the model while the clock
+is stalled". The 1 FPS feed, the sync, and the Observation contract are unchanged.
 
-Design note (Live API): frames + the report request are sent as ONE turn-based
-`send_client_content` call (the docs discourage interleaving send_realtime_input
-with send_client_content). `_observe_once` isolates that strategy so it can be
-swapped for pure realtime streaming if testing prefers it.
+Lifecycle: the one Gemini spender, so its cost is gated on the clock. While
+race_time_s advances it calls the model every OBSERVE_EVERY_S seconds; when the
+sim pauses/ends it makes NO calls (cost = 0) and keeps polling cheaply; the 10-min
+deadman is the backstop if the UI dies without signalling. It does NOT idle-exit,
+so a brief pause won't kill the process.
 
 Run (after `source activate.sh`, with the simulator publishing):
     python -m observers.video.observer --group grp_01_cam01_cam02_cam03_cam04
@@ -43,15 +43,9 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("video.observer")
 
-# Live model per backend — Vertex and the Gemini Developer API have DIFFERENT
-# Live catalogs, so the right ID depends on how you authenticate:
-#   Vertex (ADC, GOOGLE_GENAI_USE_VERTEXAI=1): gemini-live-2.5-flash-native-audio
-#       is the GA model in us-central1 (video+image+text in, text out).
-#   Gemini API (GEMINI_API_KEY): gemini-3.1-flash-live-preview is the newest and
-#       the best text-out fit.
-# Override either with FE_LIVE_MODEL.
-DEFAULT_MODEL_VERTEX = "gemini-live-2.5-flash-native-audio"
-DEFAULT_MODEL_GEMINI = "gemini-3.1-flash-live-preview"
+# Standard Vertex vision model (image in, JSON text out). Override with
+# FE_VIDEO_MODEL, e.g. gemini-3.1-flash if your project has it.
+DEFAULT_MODEL = "gemini-2.5-flash"
 OBSERVE_EVERY_S = 3          # request a structured report every N race-seconds
 GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)  # race_time_s=0
 
@@ -97,7 +91,7 @@ def parse_report(text: str, ts_utc: datetime) -> Optional[Observation]:
 
 
 class VideoObserver:
-    """Clock-gated Gemini Live observer over one 2x2 mosaic."""
+    """Clock-gated multimodal observer over one 2x2 mosaic."""
 
     def __init__(
         self,
@@ -112,46 +106,20 @@ class VideoObserver:
         self.mosaic = mosaic
         self.observe_every_s = observe_every_s
         self.emit = emit
-        self._use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true")
-        self.model = model or os.environ.get("FE_LIVE_MODEL") or (
-            DEFAULT_MODEL_VERTEX if self._use_vertex else DEFAULT_MODEL_GEMINI)
+        self.model = model or os.environ.get("FE_VIDEO_MODEL") or DEFAULT_MODEL
         self._client = None
-        self._live_cm = None
-        self._session = None            # the open Gemini Live session, or None
+        self._active = False            # True while watching (clock advancing)
         self._last_processed = -1       # last race-second sent to the model
 
-    # -- Gemini Live session management (clock-gated open/close) --------------
-    async def _open_live(self) -> None:
-        if self._session is not None:
-            return
+    def _ensure_client(self) -> None:
         from google import genai
         if self._client is None:
-            # genai.Client() auto-detects the backend from env: Vertex when
-            # GOOGLE_GENAI_USE_VERTEXAI=1 (ADC), else the Gemini Developer API
-            # via GOOGLE_API_KEY. (Per the Live API quickstart — no v1beta needed.)
+            # Auto-detects the backend from env (Vertex via ADC by default).
             self._client = genai.Client()
-        config = {
-            "response_modalities": ["TEXT"],
-            "system_instruction": prompts.system_instruction(self.mosaic.panels),
-        }
-        self._live_cm = self._client.aio.live.connect(model=self.model, config=config)
-        self._session = await self._live_cm.__aenter__()
-        logger.info("Live session opened (%s)", self.model)
 
-    async def _close_live(self) -> None:
-        if self._session is None:
-            return
-        try:
-            await self._live_cm.__aexit__(None, None, None)
-        except Exception:
-            pass
-        self._session = None
-        self._live_cm = None
-        logger.info("Live session closed (clock paused / stopping) — Gemini idle")
-
-    # -- one observation turn (the swappable strategy) -----------------------
+    # -- one observation (the swappable strategy) ----------------------------
     async def _observe_once(self, race_seconds: list[int]) -> None:
-        """Send the frames for `race_seconds` + the report request as one turn."""
+        """Ask the model about the frames for `race_seconds`; emit any incident."""
         from google.genai import types
 
         parts = []
@@ -164,46 +132,47 @@ class VideoObserver:
             return
         parts.append(types.Part(text=prompts.OBSERVE_REQUEST))
 
-        await self._session.send_client_content(
-            turns=types.Content(role="user", parts=parts), turn_complete=True)
-
-        chunks: list[str] = []
-        async for msg in self._session.receive():
-            if getattr(msg, "text", None):
-                chunks.append(msg.text)
-            sc = getattr(msg, "server_content", None)
-            if sc and getattr(sc, "turn_complete", False):
-                break
+        resp = await self._client.aio.models.generate_content(
+            model=self.model,
+            contents=[types.Content(role="user", parts=parts)],
+            config=types.GenerateContentConfig(
+                system_instruction=prompts.system_instruction(self.mosaic.panels),
+                temperature=0.2,
+                response_mime_type="application/json",
+            ),
+        )
         ts = GREEN_FLAG + timedelta(seconds=race_seconds[-1])
-        obs = parse_report("".join(chunks), ts)
+        obs = parse_report(resp.text or "", ts)
         if obs:
             self.emit(obs)
 
-    # -- the main clock-gated loop -------------------------------------------
+    # -- the clock-gated loop ------------------------------------------------
     async def run(self, session: Session) -> str:
-        try:
-            while session.active():
-                sample = self.clock.read()
-                advancing = sample.reachable and self.clock.is_advancing()
+        self._ensure_client()
+        while session.active():
+            sample = self.clock.read()
+            advancing = sample.reachable and self.clock.is_advancing()
 
-                if not advancing:
-                    await self._close_live()          # pause/ended → stop Gemini
-                    await asyncio.sleep(1.0)
-                    continue
-
-                session.touch()
-                await self._open_live()
-                now_s = int(sample.race_time_s)
-                # process each new race-second since last, in observe batches
-                pending = [s for s in range(self._last_processed + 1, now_s + 1)]
-                for i in range(0, len(pending), self.observe_every_s):
-                    batch = pending[i:i + self.observe_every_s]
-                    if len(batch) == self.observe_every_s or batch[-1] == now_s:
-                        await self._observe_once(batch)
-                        self._last_processed = batch[-1]
+            if not advancing:
+                if self._active:
+                    logger.info("clock paused/ended — video analysis idle (no Gemini calls)")
+                    self._active = False
                 await asyncio.sleep(1.0)
-        finally:
-            await self._close_live()
+                continue
+
+            if not self._active:
+                logger.info("clock advancing — watching (model=%s)", self.model)
+                self._active = True
+            session.touch()
+
+            now_s = int(sample.race_time_s)
+            pending = [s for s in range(self._last_processed + 1, now_s + 1)]
+            for i in range(0, len(pending), self.observe_every_s):
+                batch = pending[i:i + self.observe_every_s]
+                if len(batch) == self.observe_every_s or batch[-1] == now_s:
+                    await self._observe_once(batch)
+                    self._last_processed = batch[-1]
+            await asyncio.sleep(1.0)
         return session.stop_reason or "stopped"
 
 
@@ -219,7 +188,7 @@ def _resolve_mosaic(group: str, bucket: Optional[str], local: Optional[str]) -> 
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Clock-gated Gemini Live video observer")
+    ap = argparse.ArgumentParser(description="Clock-gated multimodal video observer")
     ap.add_argument("--group", required=True, help="mosaic group_id to watch")
     ap.add_argument("--bucket", default=None, help="mosaics bucket (default $MOSAICS_BUCKET)")
     ap.add_argument("--local", default=None, help="local dir of mosaics instead of a bucket")
@@ -242,8 +211,8 @@ def main() -> int:
               f"conf={o.confidence:.2f} sev={o.severity_hint:>3}  {o.summary}")
     observer.emit = show
 
-    # Video observer: deadman backstop ONLY (no idle-exit — a pause must not kill
-    # it; the clock gate closes the Live session instead).
+    # Deadman backstop ONLY (no idle-exit — a pause must not kill it; the clock
+    # gate simply stops making model calls).
     with Session(max_runtime_s=(args.max_runtime or None), idle_timeout_s=None,
                  name="video") as sess:
         reason = asyncio.run(observer.run(sess))

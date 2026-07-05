@@ -373,6 +373,23 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   Watch on next run: whether the native-audio model honours response_modalities
   ["TEXT"] and returns parseable JSON from the turn-based `_observe_once`.
 
+- **2026-07-05 (video observer — pivot off Live API)** — Live testing on Vertex
+  proved the Live path is a dead end for us: the only GA Vertex Live model is
+  `gemini-live-2.5-flash-native-audio`, which returns `1007 Text output is not
+  supported for native audio output model`. The text-capable Live model
+  (`gemini-3.1-flash-live-preview`) is Gemini-Developer-API only (needs an API
+  key), and Patrick is staying on Vertex/ADC (no key). **Decision: drop the Live
+  API for the video observer; use standard multimodal `generate_content` on a
+  Vertex vision model (`gemini-2.5-flash`, override `FE_VIDEO_MODEL`).** Same 1 FPS
+  clock-paced feed, same Observations, but image-in/JSON-text-out that actually
+  works on Vertex — and simpler + cheaper to gate (no persistent session; the
+  clock gate just stops issuing calls when race_time_s stalls). Re-validated
+  offline: parsing + clock-gating (calls only while advancing, zero when paused).
+  Model IDs learned: Vertex Live = native-audio (audio-only); Gemini-API Live =
+  `gemini-3.1-flash-live-preview` (`GOOGLE_API_KEY`, no v1beta needed). `media=` is
+  deprecated in send_realtime_input (now `video=`) — moot now that we use
+  generate_content.
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging
