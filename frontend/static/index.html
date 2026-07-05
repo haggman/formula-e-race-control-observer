@@ -11,8 +11,10 @@
     --yellow:#ffd23f; --dbl:#ff9e2c; --sc:#ff4d4d; --green:#39d98a;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
+  body{margin:0;background:var(--bg);color:var(--ink);height:100vh;overflow:hidden;
+       display:flex;flex-direction:column;
        font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  header,#banner,.bar{flex:0 0 auto}
   header{display:flex;align-items:center;gap:16px;padding:10px 16px;
          background:var(--panel2);border-bottom:1px solid var(--edge)}
   header h1{font-size:16px;margin:0;letter-spacing:.5px;font-weight:700}
@@ -21,11 +23,13 @@
   .clock{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--dim)}
   .clock b{color:var(--ink);font-size:16px}
   #banner{padding:6px 16px;font-weight:700;text-align:center;display:none}
-  .wrap{display:grid;grid-template-columns:1fr;gap:10px;padding:10px}
-  .map{background:var(--panel);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
-  .cols{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:10px}
+  .wrap{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:10px;padding:10px}
+  .map{flex:1 1 auto;min-height:0;background:var(--panel);border:1px solid var(--edge);
+       border-radius:10px;overflow:hidden}
+  .map svg{width:100%;height:100%;display:block}
+  .cols{flex:0 0 auto;height:230px;display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:10px}
   .col{background:var(--panel);border:1px solid var(--edge);border-radius:10px;
-       display:flex;flex-direction:column;min-height:280px;max-height:44vh}
+       display:flex;flex-direction:column;min-height:0}
   .col h2{margin:0;padding:9px 12px;font-size:12px;letter-spacing:1px;text-transform:uppercase;
           border-bottom:1px solid var(--edge);color:var(--dim)}
   .col.tele h2{color:var(--tele)} .col.video h2{color:var(--video)}
@@ -83,7 +87,7 @@
 
 <div class="wrap">
   <div class="map">
-    <svg id="svg" viewBox="0 0 1000 620" width="100%" style="display:block"></svg>
+    <svg id="svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet"></svg>
   </div>
   <div class="cols">
     <div class="col tele"><h2>▸ Telemetry Agent</h2><div class="feed" id="teleFeed"></div></div>
@@ -177,11 +181,13 @@ function onIncident(p){
      inc.approved===false?`<div class="decided" style="color:#ff9a9a">✕ rejected</div>`:
      `<div class="btns"><button class="btn ok" onclick="decide('${id}','approve')">Approve — deploy ${flag.replace(/_/g,' ')}</button>`+
      `<button class="btn no" onclick="decide('${id}','reject')">Reject</button></div>`);
-  // banner
-  const ban=document.getElementById('banner');
-  ban.style.display='block'; ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)';
-  ban.style.color='#160000';
-  ban.textContent=`${kind}: ${cars} — RECOMMEND ${flag.replace(/_/g,' ')}`+(inc.corroborated?' · CORROBORATED':'');
+  // banner (live beats only — skip stale Firestore snapshots on reconnect)
+  if(kind!=='SNAPSHOT'){
+    const ban=document.getElementById('banner');
+    ban.style.display='block'; ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)';
+    ban.style.color='#160000';
+    ban.textContent=`${kind}: ${cars} — RECOMMEND ${flag.replace(/_/g,' ')}`+(inc.corroborated?' · CORROBORATED':'');
+  }
   // map marker + camera highlight
   if(inc.location && inc.location.gps_lat!=null){
     const [x,y]=gpsXY(inc.location.gps_lat,inc.location.gps_lng);
