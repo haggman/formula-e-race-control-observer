@@ -46,8 +46,8 @@ logging.getLogger("google_genai.models").setLevel(logging.WARNING)  # quiet AFC 
 logger = logging.getLogger("video.observer")
 
 # Standard Vertex vision model (image in, JSON text out). Override with
-# FE_VIDEO_MODEL, e.g. gemini-3.1-flash if your project has it.
-DEFAULT_MODEL = "gemini-2.5-flash"
+# FE_VIDEO_MODEL if your project serves a different ID.
+DEFAULT_MODEL = "gemini-3.5-flash"
 OBSERVE_EVERY_S = 3          # request a structured report every N race-seconds
 GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)  # race_time_s=0
 
