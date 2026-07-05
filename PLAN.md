@@ -361,6 +361,18 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   grid prompt, report parsing (pos/neg/garbage), and the clock-gating loop
   (open→observe while advancing → close on stall). Live Gemini call pending GCP.
 
+- **2026-07-05 (live-testing the video observer)** — First live run in a lab
+  project surfaced two fixes: (1) mosaic frame extraction needs ffmpeg, which the
+  student env lacks → switched to the pip-bundled static binary via `imageio-ffmpeg`
+  (`_ffmpeg_bin()` prefers system, falls back to bundled); no apt-get for students.
+  (2) The Live model default `gemini-live-2.5-flash` was invalid on Vertex (1008
+  policy violation) → corrected to the GA `gemini-live-2.5-flash-native-audio`
+  (per the model card: video+image+text in, text out; us-central1 supported;
+  10-min default session length matches our deadman). Everything up to the Live
+  handshake works, incl. the clock-gate opening the session on the curl jump.
+  Watch on next run: whether the native-audio model honours response_modalities
+  ["TEXT"] and returns parseable JSON from the turn-based `_observe_once`.
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging

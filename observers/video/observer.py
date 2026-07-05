@@ -43,7 +43,11 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("video.observer")
 
-DEFAULT_MODEL_VERTEX = "gemini-live-2.5-flash"
+# Standard (half-cascade) Live model — built for video/image/text IN, TEXT out,
+# which is exactly our silent-CCTV -> JSON case (better than the audio-first
+# native-audio model). Prefer the newest your project has via FE_LIVE_MODEL:
+#   gemini-3.1-flash-live  (newest)  >  gemini-2.5-flash-live  >  native-audio.
+DEFAULT_MODEL_VERTEX = "gemini-2.5-flash-live"
 DEFAULT_MODEL_GEMINI = "gemini-live-2.5-flash-preview"
 OBSERVE_EVERY_S = 3          # request a structured report every N race-seconds
 GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)  # race_time_s=0
