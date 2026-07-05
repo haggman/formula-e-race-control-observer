@@ -20,6 +20,8 @@ google-cloud-aiplatform[adk,agent_engines]>=1.70
 
 # --- Video observer (Gemini Live API, 1 FPS multimodal) ---
 google-genai>=0.8
+# Static ffmpeg binary (no system apt-get needed) for mosaic frame extraction.
+imageio-ffmpeg>=0.5
 
 # --- BigQuery (race-control corroboration, history) ---
 google-cloud-bigquery>=3.27

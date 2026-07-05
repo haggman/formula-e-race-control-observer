@@ -13,9 +13,21 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+
+
+def _ffmpeg_bin() -> str:
+    """Path to an ffmpeg binary. Prefer a system ffmpeg; otherwise fall back to
+    the static binary bundled by the pip package imageio-ffmpeg — so student lab
+    projects don't need a system-level `apt-get install ffmpeg`."""
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
 
 
 @dataclass
@@ -36,7 +48,7 @@ class MosaicSource:
         local = self._localise(self.mosaic_ref, os.path.join(self.work_dir, "mosaic.mp4"))
         # Mosaic is already 1 FPS; extract every frame → f00001.jpg (race-second 0).
         subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", local, "-vf", "fps=1", "-q:v", "3",
+            [_ffmpeg_bin(), "-v", "error", "-i", local, "-vf", "fps=1", "-q:v", "3",
              os.path.join(self.work_dir, "f%05d.jpg")],
             check=True,
         )
