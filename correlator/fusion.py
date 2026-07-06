@@ -166,10 +166,12 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     Safety Car. This mirrors how R10 was officiated — the Fenestraz/Nato stop,
     unmistakable on camera, drew the Safety Car.
 
-    Policy:
-      - stopped car confirmed by BOTH senses, or >=2 cars stopped, or sev >= 85
-                                                     → SAFETY_CAR
-      - single-sensor stop, severity 60-79, or debris → DOUBLE_YELLOW
+    Policy (the VideoVerifier's verdict is the escalator/veto):
+      - video verdict "cleared" (car recovered / line clear) → NONE, whatever
+        telemetry said — this is the false-alarm veto
+      - video verdict "blocked", stop confirmed by BOTH senses, >=2 cars stopped,
+        a telemetry PROLONGED_STOP, or sev >= 85                → SAFETY_CAR
+      - single-sensor stop (awaiting video), severity 60-79, or debris → DOUBLE_YELLOW
       - severity 40-59                                → YELLOW at the turn
       - below that                                    → NONE (note / keep watching)
     """
@@ -178,15 +180,28 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
         o for o in incident.observations if o.signal in _STOPPED_SIGNALS
     ]
     stopped_cars = {o.car_number for o in stopped if o.car_number is not None}
-    confirmed_stop = stopped and incident.corroborated
-    # A telemetry PROLONGED_STOP is a confirmed blockage on its own — escalate
-    # fast, without waiting for the (slow, variable) video corroboration.
     prolonged = any(o.signal == SignalType.PROLONGED_STOP for o in incident.observations)
+
+    # --- Video verification overrides ------------------------------------
+    # CLEARED is the whole point of the verifier: telemetry saw a stop, but the
+    # CCTV shows the car recovered / the racing line is clear → stand down.
+    # Exception: a telemetry PROLONGED_STOP (confirmed ~18s stationary) is too
+    # strong to veto on a camera's say-so — persistence stays authoritative.
+    if incident.video_verdict == "cleared" and not prolonged:
+        return FlagRecommendation(
+            flag=FlagType.NONE, turns=turns,
+            rationale=("Video verification: the car recovered and the racing line is clear — "
+                       "no flag. " + (incident.video_note or "")).strip(),
+        )
+    # BLOCKED corroborates a stop → full Safety Car (persistent obstruction on CCTV).
+    video_blocked = incident.video_verdict == "blocked"
+    confirmed_stop = stopped and (incident.corroborated or video_blocked)
 
     if len(stopped_cars) >= 2 or confirmed_stop or prolonged or incident.severity >= 85:
         return FlagRecommendation(
             flag=FlagType.SAFETY_CAR, turns=turns,
-            rationale=_stopped_rationale(stopped_cars, incident),
+            rationale=_stopped_rationale(stopped_cars, incident)
+            + (f" {incident.video_note}" if video_blocked and incident.video_note else ""),
         )
     if stopped:
         return FlagRecommendation(
@@ -214,7 +229,8 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
 def _stopped_rationale(stopped_cars: set[int], incident: CorrelatedIncident) -> str:
     who = ", ".join(f"#{c}" for c in sorted(stopped_cars)) or "a car"
     where = f" at {incident.location.turn}" if incident.location.turn else ""
-    corr = " Confirmed by both telemetry and video." if incident.corroborated else ""
+    confirmed = incident.corroborated or incident.video_verdict == "blocked"
+    corr = " Confirmed by both telemetry and video." if confirmed else ""
     return f"Stopped car(s) {who}{where} — track obstruction.{corr}"
 
 

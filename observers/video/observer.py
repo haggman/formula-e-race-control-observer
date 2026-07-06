@@ -1,5 +1,13 @@
 """Video Observer — the clock-gated multimodal observer (Agent 1).
 
+⚠️ SUPERSEDED by observers/video/verifier.py. Running this continuously over the
+whole race HALLUCINATED persistent incidents (a full-race "pileup" that never
+happened — see notebooks/verify_camera_mapping.ipynb). The video plane is now a
+telemetry-TRIGGERED verifier the correlator calls on a stop, not a streaming
+detector. This module is kept only for its mosaic helpers (_resolve_mosaic) that
+the verifier and the catalogue scripts still import; it is no longer launched as
+an agent.
+
 Watches one 2x2 camera mosaic at ~1 frame/second, driven by the race clock, and
 emits video Observations for safety incidents.
 

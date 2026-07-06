@@ -485,6 +485,31 @@ So a "Günther incident" button jumps to ~570s, "Hero incident" to ~1560s, etc.
   Run: `uvicorn frontend.main:app --port 8080` + Web Preview; needs the observers +
   correlator + sim running for live data.
 
+- **2026-07-06 (video plane redesigned → telemetry-triggered VERIFIER)** — A full-race
+  offline catalogue (`scripts/catalogue_*.py`) proved the streaming video observer
+  HALLUCINATES: run continuously it invented a Turn-9B "pileup" that lasted the whole
+  race (the rolling scratchpad memory feeding its own false reports back). Validated a
+  new design in `notebooks/verify_camera_mapping.ipynb` against the real footage, and
+  cross-checked every incident against the official FIA result (only #7 Günther and
+  #23 Fenestraz retired; #17/#48 finished). Findings: (1) grounded, stateless
+  confirm/deny does NOT hallucinate; (2) ask about PERSISTENCE ("still blocked at the
+  end, or cleared?"), not presence — that cleanly separates a real retirement from a
+  spin-and-recover (Evans); (3) judge TRACK STATE, not car identity (the model just
+  echoes the number you give it); (4) our GPS→camera map is unreliable, so sweep ALL
+  groups concurrently and take the strongest blockage. Built `observers/video/verifier.py`
+  (VideoVerifier: stateless, async all-groups parallel sweep, forward ~60s window,
+  persistence prompt → `VideoVerdict{blocked|cleared|unseen}`). Wired the three-way
+  fusion into `correlator/fusion.py` + `shared/models.py` (`video_verdict`): blocked →
+  SAFETY_CAR (corroborated), cleared → **veto** to NONE (unless a telemetry
+  PROLONGED_STOP, which stays authoritative), unseen → telemetry-only. The correlator
+  now triggers the verifier itself on a telemetry stop, once the forward window has
+  played (SimClock), off the tick loop (thread pool); it announces a new `CLEARED`
+  beat for a veto. Console renders the veto as a green "stood-down" card. The streaming
+  observer is SUPERSEDED (kept only for its mosaic helpers). **New run flow: telemetry
+  observer `--publish` + correlator (verifier built-in) + sim + console — no separate
+  video-observer process.** Verifier module + fusion + correlator integration all
+  unit/smoke-tested offline; live end-to-end run in a lab project pending.
+
 ## Build status (what exists now)
 
 - [x] Repo skeleton + packaging

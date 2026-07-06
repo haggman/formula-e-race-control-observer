@@ -196,6 +196,11 @@ class CorrelatedIncident(BaseModel):
     corroborated: bool = False
     severity: int = Field(ge=0, le=100, default=0)
     location: TrackLocation = Field(default_factory=TrackLocation)
+    # Set by the VideoVerifier after it confirms a telemetry stop against CCTV:
+    #   "blocked" (persistent obstruction) | "cleared" (car recovered) | "unseen".
+    # Drives fusion's three-way call: blocked→SC, cleared→veto, unseen→telemetry-only.
+    video_verdict: Optional[str] = None
+    video_note: Optional[str] = None     # Gemini's one-line description, for the report
 
 
 class IncidentReport(BaseModel):

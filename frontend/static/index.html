@@ -56,14 +56,18 @@
   .rec.gone{opacity:0;transform:translateY(-8px)}
   .rec.DOUBLE_YELLOW{border-left-color:var(--dbl)} .rec.SAFETY_CAR{border-left-color:var(--sc)}
   .rec.YELLOW{border-left-color:var(--yellow)}
+  .rec.cleared{border-left-color:var(--green);opacity:.92}
   .rec .top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
   .flag{font-weight:800;letter-spacing:.5px;padding:2px 8px;border-radius:5px;font-size:12px}
   .flag.DOUBLE_YELLOW{background:var(--dbl);color:#221800}
   .flag.SAFETY_CAR{background:var(--sc);color:#2a0000}
   .flag.YELLOW{background:var(--yellow);color:#221d00}
+  .flag.CLEARED{background:var(--green);color:#0c2a18}
   .kind{font-size:10px;letter-spacing:1px;color:var(--dim);border:1px solid var(--edge);
         padding:1px 6px;border-radius:10px}
   .kind.ESCALATION{color:var(--sc);border-color:var(--sc)}
+  .kind.CONFIRMED{color:var(--green);border-color:var(--green)}
+  .kind.CLEARED{color:var(--green);border-color:var(--green)}
   .corr{margin-left:auto;font-size:11px;color:var(--green);font-weight:700}
   .rec .narr{color:#c7d4e0;font-size:12.5px;margin:5px 0 8px}
   .btns{display:flex;gap:8px}
@@ -171,6 +175,16 @@ function renderCard(p){
   let card=recEls[id];
   if(!card){card=document.createElement('div');recEls[id]=card;
             document.getElementById('recs').prepend(card);}
+  // Video veto: telemetry saw a stop but CCTV shows it cleared → stand-down card, no buttons
+  if(kind==='CLEARED'){
+    card.className='rec cleared'; card.dataset.flag='NONE'; card.dataset.cars=cars||'incident';
+    card.innerHTML=
+      `<div class="top"><span class="flag CLEARED">CLEARED</span>`+
+      `<span class="kind CLEARED">VIDEO VETO</span></div>`+
+      `<div><b>${cars||'incident'}</b> — stood down, no flag</div>`+
+      `<div class="narr">${r.narrative}</div>`;
+    return;
+  }
   card.dataset.flag=flag; card.dataset.cars=cars||'incident';
   // decision state: a local click wins; else fall back to Firestore's inc.approved
   const dec=(id in decided)?decided[id]
@@ -185,7 +199,7 @@ function renderCard(p){
   card.innerHTML=
     `<div class="top"><span class="flag ${flag}">${flag.replace(/_/g,' ')}</span>`+
     `<span class="kind ${kind}">${kind}</span>`+
-    (inc.corroborated?`<span class="corr">✓ corroborated by video</span>`:``)+
+    ((inc.corroborated||inc.video_verdict==='blocked')?`<span class="corr">✓ corroborated by video</span>`:``)+
     `</div><div><b>${cars||'incident'}</b> — ${r.headline.replace(/^\[.*?\]\s*/,'')}</div>`+
     `<div class="narr">${r.narrative}</div>`+tail;
 }
@@ -195,6 +209,14 @@ function onIncident(p){
   const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
   const kind=p.kind||'NEW';
   const rk=RANK[flag]??0;
+  // Video veto: show the stand-down (even though its flag is NONE) and update the card in place
+  if(kind==='CLEARED'){
+    lastPayload[id]=p; renderCard(p);
+    const ban=document.getElementById('banner');
+    ban.style.display='block'; ban.style.background='#16351f'; ban.style.color='#c9f5d9';
+    ban.textContent=`STOOD DOWN: ${cars} — video verification cleared it, no flag`;
+    return;
+  }
   // NONE = "note and monitor", not a flag — keep it off the decision surface entirely
   if(flag==='NONE') return;
   // Already decided at this level (or higher)? Stay quiet. A genuine escalation

@@ -15,18 +15,23 @@ watchdog (goes quiet when the observers do); optional deadman.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
+import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.models import CorrelatedIncident, FlagType, IncidentReport, Observation  # noqa: E402
+from shared.models import (CorrelatedIncident, FlagType, IncidentReport,     # noqa: E402
+                           Modality, Observation, SignalType)
 from shared.lifecycle import Session                                                 # noqa: E402
 from shared import observation_bus                                                    # noqa: E402
+from observers.video.clock import SimClock                                           # noqa: E402
 from correlator import fusion, reporter                                              # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
@@ -37,6 +42,18 @@ BUFFER_S = 180.0         # keep Observations this long (race-time) for fusion �
                          # must exceed the telemetry↔video detection-latency gap
                          # (video can lag the stop by ~90s) so both survive to fuse
 FUSE_EVERY_S = 2.0       # re-fuse the buffer this often
+
+# Green flag (race_time_s = 0) — to turn an Observation's ts_utc into a race-second
+# for the video verifier (which slices the mosaic by race-second).
+GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)
+# Wait this long (race-time) AFTER a telemetry stop before asking the verifier, so
+# the forward window has actually played — we confirm from what happened, not by
+# peeking ahead. Matches the verifier's ~50s tail plus a small margin.
+VERIFY_TAIL_S = 55.0
+
+# Telemetry signals worth a video check (a stop, or a flag-worthy near-miss).
+_VERIFY_TRIGGERS = {SignalType.STOPPED_CAR, SignalType.PROLONGED_STOP,
+                    SignalType.HARD_DECEL, SignalType.YAW_SPIKE}
 
 # Flag severity ordering — used to decide what counts as an ESCALATION.
 _FLAG_RANK = {
@@ -59,14 +76,21 @@ def _incident_key(inc: CorrelatedIncident) -> tuple:
 class CorrelatorService:
     """Buffers Observations, fuses, and announces new/escalated incidents."""
 
-    def __init__(self, *, use_llm: bool = True, on_report=None, race_id: str = "berlin_2024_r10"):
+    def __init__(self, *, use_llm: bool = True, on_report=None, race_id: str = "berlin_2024_r10",
+                 sim_url: str | None = None, verifier=None):
         self.use_llm = use_llm
         self.on_report = on_report or self._default_report_sink
         self.race_id = race_id
         self._buf: deque[Observation] = deque()
-        self._announced: dict[tuple, tuple[int, bool]] = {}   # key -> (flag rank, corroborated)
+        # key -> (flag rank, video verdict, corroborated)
+        self._announced: dict[tuple, tuple[int, str | None, bool]] = {}
         self._db = None
         self._incident_pub = None                             # set in run() → fe-incidents
+        # -- video verification --
+        self.verifier = verifier                              # VideoVerifier or None
+        self._clock = SimClock(sim_url) if sim_url else None  # to time the forward window
+        self._verify: dict[tuple, dict] = {}                  # key -> {triggered, verdict, note}
+        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verify")
 
     # -- ingest --------------------------------------------------------------
     def add(self, obs: Observation) -> None:
@@ -81,25 +105,82 @@ class CorrelatorService:
         cutoff = newest - BUFFER_S
         self._buf = deque(o for o in self._buf if o.ts_utc.timestamp() >= cutoff)
 
+    # -- video verification --------------------------------------------------
+    def _race_now(self) -> float | None:
+        if self._clock is None:
+            return None
+        s = self._clock.read()
+        return s.race_time_s if s.reachable else None
+
+    def _stop_time(self, inc: CorrelatedIncident) -> float | None:
+        """Race-second of the earliest telemetry trigger in this incident."""
+        tele = [o for o in inc.observations
+                if o.modality == Modality.TELEMETRY and o.signal in _VERIFY_TRIGGERS]
+        if not tele:
+            return None
+        return (min(o.ts_utc for o in tele) - GREEN_FLAG).total_seconds()
+
+    def _maybe_verify(self, inc: CorrelatedIncident, key: tuple) -> None:
+        """Attach a ready verdict; otherwise trigger the CCTV check once the
+        forward window has played (so we confirm from what happened, not ahead)."""
+        if self.verifier is None:
+            return
+        st = self._verify.get(key)
+        if st and st.get("verdict") is not None:
+            inc.video_verdict = st["verdict"]
+            inc.video_note = st.get("note")
+            return
+        if st and st.get("triggered"):
+            return
+        stop_time = self._stop_time(inc)
+        if stop_time is None:
+            return
+        now = self._race_now()
+        if now is not None and now < stop_time + VERIFY_TAIL_S:
+            return                                          # window hasn't played yet
+        self._verify[key] = {"triggered": True, "verdict": None, "note": None}
+        self._pool.submit(self._run_verify, key, int(stop_time))
+        logger.info("verifying stop @%ds on CCTV (all groups)…", int(stop_time))
+
+    def _run_verify(self, key: tuple, stop_time: int) -> None:
+        try:
+            verdict = asyncio.run(self.verifier.verify(stop_time))
+            self._verify[key].update(verdict=verdict.state, note=verdict.description)
+            logger.info("video verdict @%ds → %s%s", stop_time, verdict.state.upper(),
+                        f" ({', '.join(verdict.cameras)})" if verdict.cameras else "")
+        except Exception as e:
+            logger.warning("verification failed @%ds: %s", stop_time, e)
+            self._verify[key]["triggered"] = False          # allow a retry next tick
+
     # -- fuse + announce -----------------------------------------------------
     def tick(self) -> list[IncidentReport]:
         """Fuse the current buffer; return reports for any new/escalated incident."""
         self._evict()
         reports: list[IncidentReport] = []
         for inc in fusion.correlate(list(self._buf), race_id=self.race_id):
+            key = _incident_key(inc)
+            self._maybe_verify(inc, key)                    # attach verdict / trigger check
             flag = fusion.recommend_flag(inc)
             rank = _FLAG_RANK.get(flag.flag, 0)
-            key = _incident_key(inc)
-            prev = self._announced.get(key)                 # (rank, corroborated) or None
+            prev = self._announced.get(key)                 # (rank, verdict, corroborated) or None
+            verdict = inc.video_verdict
 
-            escalated = prev is not None and rank > prev[0]
-            newly_confirmed = inc.corroborated and (prev is None or not prev[1])
-            if prev is not None and rank <= prev[0] and not newly_confirmed:
+            if prev is None:
+                kind = "NEW"
+            elif verdict == "cleared" and rank == 0 and prev[1] != "cleared":
+                kind = "CLEARED"                            # video veto TOOK EFFECT (flag→none)
+            elif rank > prev[0]:
+                kind = "ESCALATION"
+            elif verdict == "blocked" and prev[1] != "blocked":
+                kind = "CONFIRMED"
+            elif inc.corroborated and not prev[2]:
+                kind = "CONFIRMED"
+            else:
                 continue                                    # nothing new to say
             self._announced[key] = (max(rank, prev[0] if prev else 0),
-                                    inc.corroborated or (prev[1] if prev else False))
+                                    verdict or (prev[1] if prev else None),
+                                    inc.corroborated or (prev[2] if prev else False))
 
-            kind = "NEW" if prev is None else ("ESCALATION" if escalated else "CONFIRMED")
             report = reporter.draft_report(inc, llm=self.use_llm)
             reports.append(report)
             self.on_report(report, kind=kind)
@@ -132,17 +213,28 @@ class CorrelatorService:
 
 
 def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
-        idle_timeout_s: float | None = None) -> str:
+        idle_timeout_s: float | None = None, verify: bool = True) -> str:
     """Subscribe to the observation bus and correlate under the lifecycle."""
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if not project:
         raise RuntimeError("GOOGLE_CLOUD_PROJECT required")
 
-    svc = CorrelatorService(use_llm=use_llm)
+    svc = CorrelatorService(use_llm=use_llm, sim_url=os.environ.get("SIM_URL"))
     try:
         svc._incident_pub = observation_bus.IncidentPublisher(project)
     except Exception as e:
         logger.warning("fe-incidents publisher unavailable (%s) — console live feed off", e)
+
+    if verify:
+        try:
+            from observers.video.verifier import VideoVerifier
+            svc.verifier = VideoVerifier()                  # sweeps all groups on a stop
+            threading.Thread(target=svc.verifier.warmup, daemon=True,
+                             name="verifier-warmup").start()
+            logger.info("video verifier armed (%d groups; warming mosaics in background)",
+                        len(svc.verifier.groups))
+        except Exception as e:
+            logger.warning("video verifier unavailable (%s) — telemetry-only", e)
 
     with Session(max_runtime_s=max_runtime_s, idle_timeout_s=idle_timeout_s,
                  name="correlator") as sess:
@@ -175,10 +267,13 @@ def main() -> int:
     ap.add_argument("--max-runtime", type=float, default=0.0, help="optional deadman cap; 0 = none")
     ap.add_argument("--idle-timeout", type=float, default=0.0,
                     help="stop after this many quiet seconds; 0 = run until stopped (default)")
+    ap.add_argument("--no-verify", action="store_true",
+                    help="disable the video verifier (telemetry-only correlation)")
     args = ap.parse_args()
     reason = run(use_llm=not args.no_llm,
                  max_runtime_s=(args.max_runtime or None),
-                 idle_timeout_s=(args.idle_timeout or None))
+                 idle_timeout_s=(args.idle_timeout or None),
+                 verify=not args.no_verify)
     logger.info("stopped (%s)", reason)
     return 0
 
