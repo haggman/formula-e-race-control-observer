@@ -37,6 +37,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -239,6 +240,9 @@ def main() -> int:
     ap.add_argument("--tail", type=int, default=TAIL_S)
     ap.add_argument("--step", type=int, default=STEP_S)
     ap.add_argument("--model", default=None)
+    ap.add_argument("--out", default=None,
+                    help="append the verdict (JSON line) to this file so it survives a "
+                         "Cloud Shell restart, e.g. --out ~/fe_verifier_results.jsonl")
     args = ap.parse_args()
 
     v = VideoVerifier(bucket=args.bucket, local=args.local, model=args.model)
@@ -248,6 +252,17 @@ def main() -> int:
           + (f"  conf={verdict.confidence}" if verdict.cleared else ""))
     if verdict.description:
         print(f"  {verdict.description}")
+
+    if args.out:
+        out = os.path.expanduser(args.out)
+        os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
+        rec = {"run_utc": datetime.now(timezone.utc).isoformat(), "at": args.at,
+               "state": verdict.state, "cameras": verdict.cameras,
+               "confidence": verdict.confidence, "description": verdict.description,
+               "per_group": verdict.per_group}
+        with open(out, "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        print(f"  (appended to {out})")
     return 0
 
 
