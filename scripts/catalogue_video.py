@@ -64,24 +64,70 @@ def list_groups(bucket: str | None, local: str | None) -> list[str]:
     return [g["group_id"] for g in manifest.get("groups", [])]
 
 
+def _ckpt_path(out_dir: str, group: str) -> str:
+    return os.path.join(out_dir, f"{group}.progress.json")
+
+
+def _read_ckpt(path: str) -> dict | None:
+    try:
+        return json.load(open(path))
+    except Exception:
+        return None
+
+
+def _write_ckpt(path: str, data: dict) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, path)          # atomic — a kill mid-write can't corrupt it
+
+
 async def sweep_group(group: str, *, bucket: str | None, local: str | None,
                       model: str | None, step: int, window: int,
-                      start: int, end: int | None, out_dir: str) -> int:
-    """Run one group's mosaic through the model over the race; write its JSONL."""
+                      start: int, end: int | None, out_dir: str,
+                      fresh: bool = False) -> int:
+    """Run one group's mosaic through the model over the race; write its JSONL.
+
+    Resumable: a per-group checkpoint records the next race-second to process, so
+    a re-run skips a completed group (without re-downloading its mosaic) and
+    resumes a partial one where it stopped. Pass fresh=True to force a redo.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    ckpt_p = _ckpt_path(out_dir, group)
+    path = os.path.join(out_dir, f"{group}.jsonl")
+    cfg = {"step": step, "window": window, "start": start, "end": end}
+
+    ck = None if fresh else _read_ckpt(ckpt_p)
+    resume = False
+    if ck and ck.get("cfg") == cfg and os.path.exists(path):
+        if ck.get("done"):
+            logger.info("group %s already complete (%d obs) — skipping",
+                        group, ck.get("count", 0))
+            return ck.get("count", 0)
+        resume = True
+    elif ck and ck.get("cfg") != cfg:
+        logger.info("group %s parameters changed since last run — restarting it", group)
+
+    # Need the mosaic (download + extract) to process any frame. Skipped above for
+    # already-complete groups, so a re-run doesn't re-pull finished work.
     mosaic_ref, manifest_ref = _resolve_mosaic(group, bucket, local)
     mosaic = MosaicSource(mosaic_ref=mosaic_ref, group_id=group,
                           manifest_ref=manifest_ref).prepare()
     last = end if end is not None else mosaic.max_second
-    logger.info("group %s ready — %d frames; cataloguing %d..%d every %ds",
-                group, mosaic.max_second + 1, start, last, step)
+
+    if resume:
+        begin, count, mode = ck["next_s"], ck.get("count", 0), "a"
+        logger.info("group %s resuming at %ds/%ds (%d obs so far)",
+                    group, begin, last, count)
+    else:
+        begin, count, mode = start, 0, "w"
+        logger.info("group %s ready — %d frames; cataloguing %d..%d every %ds",
+                    group, mosaic.max_second + 1, start, last, step)
 
     observer = VideoObserver(clock=None, mosaic=mosaic, model=model, window_s=window)
     observer._ensure_client()
 
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"{group}.jsonl")
-    count = 0
-    with open(path, "w") as fh:
+    with open(path, mode) as fh:
         def sink(o) -> None:
             nonlocal count
             fh.write(json.dumps({
@@ -103,15 +149,21 @@ async def sweep_group(group: str, *, bucket: str | None, local: str | None,
         observer.emit = sink
 
         t0 = time.monotonic()
-        for s in range(start, last + 1, step):
+        for s in range(begin, last + 1, step):
             win_start = max(0, s - window + 1)
             try:
                 await observer._observe_once(list(range(win_start, s + 1)))
             except Exception as e:
                 logger.warning("  observe @%ds failed: %s", s, e)
+            # checkpoint after each step → a dropped shell loses at most one step
+            _write_ckpt(ckpt_p, {"cfg": cfg, "group": group, "last": last,
+                                 "next_s": s + step, "count": count, "done": False})
             if s and s % (step * 20) == 0:
                 logger.info("  ...%d/%ds  (%d incidents, %.0fs elapsed)",
                             s, last, count, time.monotonic() - t0)
+
+    _write_ckpt(ckpt_p, {"cfg": cfg, "group": group, "last": last,
+                         "next_s": last + step, "count": count, "done": True})
     logger.info("group %s DONE — %d observation(s) → %s", group, count, path)
     return count
 
@@ -128,7 +180,7 @@ async def _amain(args) -> int:
         total += await sweep_group(
             g, bucket=args.bucket, local=args.local, model=args.model,
             step=args.step, window=args.window, start=args.start,
-            end=args.end, out_dir=args.out)
+            end=args.end, out_dir=args.out, fresh=args.fresh)
     logger.info("ALL DONE — %d observation(s) across %d group(s) → %s/",
                 total, len(groups), args.out)
     return 0
@@ -147,6 +199,8 @@ def main() -> int:
     ap.add_argument("--start", type=int, default=0, help="first race-second (default 0)")
     ap.add_argument("--end", type=int, default=None, help="last race-second (default = end of mosaic)")
     ap.add_argument("--out", default="catalogue", help="output dir (default ./catalogue)")
+    ap.add_argument("--fresh", action="store_true",
+                    help="ignore checkpoints and redo every group from scratch")
     args = ap.parse_args()
     return asyncio.run(_amain(args))
 

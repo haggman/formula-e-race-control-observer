@@ -114,11 +114,6 @@
     <button class="cbtn" id="btnClear" onclick="clearBoard()">⌫ Clear</button>
     <button class="cbtn" onclick="restart()">⟲ Restart</button>
   </span>
-  <span class="sep"></span>
-  <span class="grp"><span class="lbl">Speed</span>
-    <button class="cbtn" id="spd1" onclick="speed(1)">1×</button>
-    <button class="cbtn" id="spd2" onclick="speed(2)">2×</button>
-  </span>
 </div>
 
 <script>
@@ -126,6 +121,7 @@ const GREEN_FLAG = Date.UTC(2024,4,12,13,4,0)/1000;   // race_time_s = 0
 const recEls={};
 const jumpEls=[];          // jump buttons, in chronological order
 let activeJump=null;       // currently-selected jump button
+let pendingPauseAt=null;   // race-second to auto-pause at (end of the jumped window)
 
 function fmtClock(s){if(s==null)return '—';const d=new Date((GREEN_FLAG+s)*1000);
   return d.toISOString().substr(11,8);}
@@ -137,7 +133,7 @@ async function initJumps(){
   const incs=[...geom.incidents].sort((a,b)=>a.race_time_s-b.race_time_s);
   incs.forEach(i=>{const b=document.createElement('button');
     b.className='cbtn jump';b.textContent=i.label;b.title=i.note||'';
-    b.onclick=()=>jump(i.race_time_s,b);jb.appendChild(b);jumpEls.push(b);});
+    b.onclick=()=>jump(i.race_time_s,b,i.pause_s);jb.appendChild(b);jumpEls.push(b);});
 }
 
 // ---- feeds ----
@@ -221,19 +217,26 @@ function onIncident(p){
 // ---- race clock ----
 function onCars(m){
   document.getElementById('clock').textContent=fmtClock(m.race_time_s);
+  // auto-pause once the race clock reaches the end of the jumped incident window
+  if(pendingPauseAt!=null && m.race_time_s!=null && m.race_time_s>=pendingPauseAt){
+    pendingPauseAt=null; autoPause();
+  }
 }
 
 // ---- controls ----
 async function ctl(p){await fetch('/control/'+p,{method:'POST'});pollStatus();}
-async function jump(t,btn){
+async function jump(t,btn,pauseAt){
   if(btn){jumpEls.forEach(b=>b.classList.remove('active'));btn.classList.add('active');activeJump=btn;}
-  resetBoard();                          // fresh slate for the new scenario
+  resetBoard();                          // fresh slate for the new scenario (clears pendingPauseAt)
+  pendingPauseAt=(pauseAt!=null && pauseAt>t)?pauseAt:null;   // auto-pause at window end
   await fetch('/control/jump',{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});
   pollStatus();
 }
-async function speed(m){await fetch('/control/speed',{method:'POST',
-  headers:{'content-type':'application/json'},body:JSON.stringify({multiplier:m})});pollStatus();}
+async function autoPause(){
+  await fetch('/control/pause',{method:'POST'});   // reached the end of the incident window
+  pollStatus();
+}
 async function decide(id,d){
   applyDecision(id, d==='approve');                       // instant, optimistic feedback
   try{await fetch(`/incident/${id}/${d}`,{method:'POST'});}catch(e){}
@@ -252,6 +255,7 @@ function applyDecision(id,approved){
 }
 // Reset the visible board for a fresh scenario (does not touch the sim).
 function resetBoard(){
+  pendingPauseAt=null;                   // cancel any armed auto-pause
   Object.values(recEls).forEach(c=>c.remove());
   [recEls,lastPayload,decided,decidedRank].forEach(o=>{for(const k in o)delete o[k];});
   document.getElementById('banner').style.display='none';
@@ -276,9 +280,6 @@ function applyStatus(s){
   const t=document.getElementById('btnToggle');           // one toggle: Pause ⇄ Resume
   t.textContent=simPaused?'▶ Resume':'⏸ Pause';
   t.classList.toggle('paused',simPaused);
-  const mult=Math.round(s.speed_multiplier||1);
-  document.getElementById('spd1').classList.toggle('active',mult<=1);
-  document.getElementById('spd2').classList.toggle('active',mult>=2);
 }
 async function togglePlay(){ await ctl(simPaused?'resume':'pause'); }
 async function pollStatus(){
