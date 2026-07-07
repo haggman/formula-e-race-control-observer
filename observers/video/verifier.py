@@ -157,9 +157,14 @@ class VideoVerifier:
         return ms
 
     def warmup(self) -> None:
-        """Pre-extract every group's frames so the first verify has no download lag."""
-        for g in self.groups:
+        """Download + extract every group's mosaic up front, so verifications never
+        pull anything at request time."""
+        n = len(self.groups)
+        logger.info("warming %d mosaics locally…", n)
+        for i, g in enumerate(self.groups, 1):
             self._mosaic(g)
+            logger.info("  mosaic %d/%d ready", i, n)
+        logger.info("✅ all %d mosaics local — verifier ready, no downloads at request time", n)
 
     def _cams(self, ms: MosaicSource, group_id: str) -> list[str]:
         if ms.panels:
