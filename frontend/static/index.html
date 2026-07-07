@@ -135,7 +135,6 @@ const GREEN_FLAG = Date.UTC(2024,4,12,13,4,0)/1000;   // race_time_s = 0
 const recEls={};
 const jumpEls=[];          // jump buttons, in chronological order
 let activeJump=null;       // currently-selected jump button
-let pendingPauseAt=null;   // race-second to auto-pause at (end of the jumped window)
 
 function fmtClock(s){if(s==null)return '—';const d=new Date((GREEN_FLAG+s)*1000);
   return d.toISOString().substr(11,8);}
@@ -232,7 +231,7 @@ function onIncident(p){
   if(flag==='NONE' && kind!=='CLEARED') return;   // note-and-monitor: off the decision surface
   pushBeat(p);
   if(kind==='SNAPSHOT') return;                    // don't banner stale Firestore replays
-  const ban=document.getElementById('banner');
+  const ban=document.getElementById('banner'); ban.dataset.kind='';
   if(kind==='CLEARED'){
     ban.style.display='block'; ban.style.background='#16351f'; ban.style.color='#c9f5d9';
     ban.textContent=`STOOD DOWN: ${cars} — video verification cleared it, no flag`;
@@ -260,10 +259,6 @@ function onAgents(a){
 // ---- race clock ----
 function onCars(m){
   document.getElementById('clock').textContent=fmtClock(m.race_time_s);
-  // auto-pause once the race clock reaches the end of the jumped incident window
-  if(pendingPauseAt!=null && m.race_time_s!=null && m.race_time_s>=pendingPauseAt){
-    pendingPauseAt=null; autoPause();
-  }
 }
 
 // ---- controls ----
@@ -271,18 +266,21 @@ async function ctl(p){await fetch('/control/'+p,{method:'POST'});pollStatus();}
 async function jump(t,btn,pauseAt){
   resetBoard();                          // fresh slate (also clears any stale jump highlight)
   if(btn){btn.classList.add('active');activeJump=btn;}        // highlight THIS incident
-  pendingPauseAt=(pauseAt!=null && pauseAt>t)?pauseAt:null;   // auto-pause at window end
+  // pass the window end to the SERVER — it auto-pauses there, so it fires even if
+  // this tab is backgrounded/closed (see /control/jump).
   await fetch('/control/jump',{method:'POST',
-    headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({race_time_s:t, pause_at:(pauseAt!=null && pauseAt>t)?pauseAt:null})});
   applyStatus({paused:false});           // jump auto-plays from here — reflect it right away
   pollStatus();
 }
-async function autoPause(){
-  await fetch('/control/pause',{method:'POST'});   // reached the end of the incident window
+// server reached the window end and paused the sim
+function onAutoPaused(){
   if(activeJump){activeJump.classList.remove('active');activeJump=null;}  // incident done → drop highlight
-  const ban=document.getElementById('banner');     // clear "window complete" indicator
+  const ban=document.getElementById('banner');
   ban.style.display='block'; ban.style.background='#1b2a3a'; ban.style.color='#cfe0f0';
   ban.textContent='⏸ Incident window complete — simulator paused. Press ▶ Resume to continue.';
+  ban.dataset.kind='paused';                       // so resuming clears it (see applyStatus)
   pollStatus();
 }
 async function decide(id,d){
@@ -304,7 +302,6 @@ function applyDecision(id,approved){
 }
 // Reset the visible board for a fresh scenario (does not touch the sim).
 function resetBoard(){
-  pendingPauseAt=null;                                    // cancel any armed auto-pause
   document.getElementById('recs').innerHTML='';          // clear the recommendation stack
   for(const k in recEls) delete recEls[k];
   document.getElementById('teleFeed').innerHTML='';      // clear the sensor feeds too
@@ -318,7 +315,7 @@ async function restart(){ resetBoard(); try{await fetch('/incidents/clear',{meth
 function setCondition(flag,cars){
   const c=document.getElementById('cond');
   c.className=flag; c.textContent='● '+flag.replace(/_/g,' ');
-  const ban=document.getElementById('banner');
+  const ban=document.getElementById('banner'); ban.dataset.kind='';
   ban.style.display='block';
   ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)'; ban.style.color='#160000';
   ban.textContent=`${flag.replace(/_/g,' ')} DEPLOYED — ${cars}`;
@@ -332,6 +329,8 @@ function applyStatus(s){
   const t=document.getElementById('btnToggle');           // one toggle: Pause ⇄ Resume
   t.textContent=simPaused?'▶ Resume':'⏸ Pause';
   t.classList.toggle('paused',simPaused);
+  const ban=document.getElementById('banner');            // resuming clears the "paused" banner
+  if(!simPaused && ban.dataset.kind==='paused'){ ban.style.display='none'; ban.dataset.kind=''; }
 }
 async function togglePlay(){ await ctl(simPaused?'resume':'pause'); }
 async function pollStatus(){
@@ -350,6 +349,7 @@ function connect(){
     else if(m.type==='decision'){applyDecision(m.incident_id, m.approved);}
     else if(m.type==='cleared'){resetBoard();}
     else if(m.type==='agents'){onAgents(m.agents);}
+    else if(m.type==='autopaused'){onAutoPaused();}
   };
   setInterval(()=>{try{ws.send('ping')}catch(e){}},15000);
 }

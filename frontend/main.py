@@ -208,11 +208,58 @@ async def _sim_post(path: str, body: dict | None = None) -> dict:
         return r.json()
 
 
+async def _sim_race_time() -> float | None:
+    if not SIM_URL:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            return (await c.get(f"{SIM_URL}/status")).json().get("race_time_s")
+    except Exception:
+        return None
+
+
+# --- server-side auto-pause at the end of a jumped incident window ---------
+# Done here (not in the browser) so it fires even when the console tab is
+# backgrounded, throttled, or closed. The console reflects it via the
+# "autopaused" push.
+_autopause_task: "asyncio.Task | None" = None
+
+
+def _cancel_autopause() -> None:
+    global _autopause_task
+    if _autopause_task and not _autopause_task.done():
+        _autopause_task.cancel()
+    _autopause_task = None
+
+
+async def _autopause_watch(pause_at: float) -> None:
+    try:
+        while True:
+            await asyncio.sleep(1.0)
+            rt = await _sim_race_time()
+            if rt is not None and rt >= pause_at:
+                await _sim_post("/pause")
+                _push({"type": "autopaused", "race_time_s": rt})
+                logger.info("auto-paused at race_time %.0f (window end)", rt)
+                return
+    except asyncio.CancelledError:
+        return
+
+
+def _schedule_autopause(pause_at) -> None:
+    _cancel_autopause()
+    if pause_at is not None:
+        global _autopause_task
+        _autopause_task = asyncio.create_task(_autopause_watch(float(pause_at)))
+
+
 @app.post("/control/jump")
 async def jump(body: dict):
-    """Jump to a flag point: pause → jump → resume (so the incident replays live)."""
+    """Jump to a flag point: pause → jump → resume (so the incident replays live),
+    and arm a server-side auto-pause at the end of the window if requested."""
     await _sim_post("/pause")
     await _sim_post("/jump", {"race_time_s": body.get("race_time_s", 0)})
+    _schedule_autopause(body.get("pause_at"))
     return await _sim_post("/resume")
 
 
@@ -240,6 +287,7 @@ async def resume():
 
 @app.post("/control/restart")
 async def restart():
+    _cancel_autopause()
     return await _sim_post("/restart")
 
 
@@ -251,6 +299,7 @@ async def speed(body: dict):
 # --- clear the board (wipe stale incidents so snapshots don't resurrect) ---
 @app.post("/incidents/clear")
 async def clear_incidents():
+    _cancel_autopause()
     try:
         from google.cloud import firestore
         db = firestore.Client(project=PROJECT_ID)
