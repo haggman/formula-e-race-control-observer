@@ -78,7 +78,14 @@
   .rec.superseded{opacity:.5}
   .rec.superseded .narr{display:none}          /* keep superseded beats compact */
   .rec.isupdate{border-left-style:dashed}
-  .corr{margin-left:auto;font-size:11px;color:var(--green);font-weight:700}
+  .corr{font-size:11px;color:var(--green);font-weight:700}
+  /* color-coded severity badge, pinned right */
+  .sev{margin-left:auto;font-size:11px;font-weight:800;letter-spacing:.5px;padding:2px 9px;border-radius:10px}
+  .sev.lo{background:#16351f;color:var(--green)}
+  .sev.mid{background:#3a3512;color:var(--yellow)}
+  .sev.hi{background:#3a2812;color:var(--dbl)}
+  .sev.crit{background:#3a1616;color:var(--sc)}
+  .rec .who{font-size:13px;margin-bottom:2px}
   .rec .narr{color:#c7d4e0;font-size:12.5px;margin:5px 0 8px}
   .btns{display:flex;gap:8px}
   .btn{flex:1;padding:7px;border-radius:6px;border:1px solid var(--edge);cursor:pointer;
@@ -182,9 +189,14 @@ function supersede(card){
   card.classList.add('superseded');
   const b=card.querySelector('.btns'); if(b) b.remove();      // no longer actionable
 }
+function sevBadge(s){                                         // color-coded severity, right-pinned
+  s=s||0;
+  const cls = s>=85?'crit' : s>=70?'hi' : s>=40?'mid' : 'lo';
+  return `<span class="sev ${cls}" title="severity ${s}/100">SEV ${s}</span>`;
+}
 function pushBeat(p){
   const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
-  const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
+  const cars=(inc.car_numbers||[]).map(c=>'#'+c).join('/');
   const kind=p.kind||'NEW';
   const corr=inc.corroborated||inc.video_verdict==='blocked';
   const prev=recEls[id], prevFlag=prev?prev.dataset.flag:null;
@@ -215,7 +227,8 @@ function pushBeat(p){
       `<div class="top"><span class="flag ${flag}">${flag.replace(/_/g,' ')}</span>`+
       `<span class="kind ${kind}">${kind}</span>${upd}`+
       (corr?`<span class="corr">✓ corroborated by video</span>`:``)+
-      `</div><div><b>${cars||'incident'}</b> — ${r.headline.replace(/^\[.*?\]\s*/,'')}</div>`+
+      sevBadge(inc.severity)+
+      `</div><div class="who"><b>${cars||'incident'}</b></div>`+
       `<div class="narr">${r.narrative}</div>`+tail;
   }
   const recs=document.getElementById('recs');
@@ -226,7 +239,7 @@ function pushBeat(p){
 
 function onIncident(p){
   const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
-  const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
+  const cars=(inc.car_numbers||[]).map(c=>'#'+c).join('/');
   const kind=p.kind||'NEW';
   if(flag==='NONE' && kind!=='CLEARED') return;   // note-and-monitor: off the decision surface
   pushBeat(p);

@@ -144,12 +144,12 @@ class CorrelatorService:
         if now is not None and now < stop_time + VERIFY_TAIL_S:
             return                                          # window hasn't played yet
         self._verify[key] = {"triggered": True, "verdict": None, "note": None}
-        self._pool.submit(self._run_verify, key, int(stop_time))
+        self._pool.submit(self._run_verify, key, int(stop_time), list(inc.car_numbers))
         logger.info("verifying stop @%ds on CCTV (all groups)…", int(stop_time))
 
-    def _run_verify(self, key: tuple, stop_time: int) -> None:
+    def _run_verify(self, key: tuple, stop_time: int, cars: list) -> None:
         try:
-            verdict = asyncio.run(self.verifier.verify(stop_time))
+            verdict = asyncio.run(self.verifier.verify(stop_time, cars=cars))
             self._verify[key].update(verdict=verdict.state, note=verdict.description)
             logger.info("video verdict @%ds → %s%s", stop_time, verdict.state.upper(),
                         f" ({', '.join(verdict.cameras)})" if verdict.cameras else "")

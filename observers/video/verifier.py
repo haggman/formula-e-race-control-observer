@@ -54,6 +54,23 @@ TAIL_S = 50          # seconds after — long enough for a recovering car to cle
 
 _PANEL_POS = ["TL", "TR", "BL", "BR"]
 
+# 2024 Formula E (Berlin R10) liveries, by car number — a hint so the verifier can
+# cross-check the stopped car against the telemetry car by colour AND number.
+LIVERIES = {
+    1:  "Andretti — white, red and blue",   17: "Andretti — white, red and blue",
+    2:  "DS Penske — gold on black",         25: "DS Penske — gold on black",
+    3:  "ERT",                               33: "ERT",
+    4:  "Envision — green",                  16: "Envision — green",
+    5:  "McLaren — papaya orange and black", 8:  "McLaren — papaya orange and black",
+    7:  "Maserati — dark blue with an orange rear flash",
+    18: "Maserati — dark blue with an orange rear flash",
+    9:  "Jaguar — black and white",          37: "Jaguar — black and white",
+    11: "ABT Cupra — copper and black",      51: "ABT Cupra — copper and black",
+    13: "Porsche — white and black with red", 94: "Porsche — white and black with red",
+    21: "Mahindra — matt red and silver",    48: "Mahindra — matt red and silver",
+    22: "Nissan — red, white and black",     23: "Nissan — red, white and black",
+}
+
 
 # ---------------------------------------------------------------------------
 # Verdict
@@ -79,23 +96,33 @@ class VideoVerdict:
 # ---------------------------------------------------------------------------
 # Prompt (persistence / track-state — the notebook-validated form)
 # ---------------------------------------------------------------------------
-def _prompt(cams: list[str], t: int, start: int, end: int) -> str:
+def _prompt(cams: list[str], t: int, start: int, end: int, cars=None) -> str:
     tl, tr, bl, br = (cams + ["?", "?", "?", "?"])[:4]
+    hint = ""
+    if cars:
+        who = ", ".join(f"#{c} ({LIVERIES.get(int(c), 'livery unknown')})" for c in cars)
+        hint = (f"Telemetry says the car(s) likely involved are: {who}. If you see a stopped car, "
+                "use its LIVERY/colour AND its car NUMBER (if you can clearly read it) to say whether "
+                "it matches. If you cannot clearly read a number, do NOT guess one — just describe the "
+                "colour/livery you see.\n")
     return (
         "You are a race-control video verifier deciding whether a SAFETY CAR is warranted.\n"
         f"Telemetry flagged a car possibly stopped near here around race time ~{t}s.\n"
+        + hint +
         f"This is a ~{end - start}s CCTV clip — a 2x2 mosaic of four cameras: "
         f"TL={tl}, TR={tr}, BL={bl}, BR={br} — covering that moment.\n"
-        "Watch the clip and judge the state by the END:\n"
+        "Judge the TRACK STATE by the END of the clip (the safety call is about the track, not which "
+        "car it is):\n"
         "- A car STILL stopped/stranded on or beside the racing line at the end (a persistent "
         "obstruction, maybe with marshals or a recovery vehicle): blockage=true, cleared=false.\n"
         "- A car appeared but DROVE AWAY / was recovered / the line is clear by the end: "
         "blockage=false, cleared=true.\n"
         "- No stopped car at any point: blockage=false, cleared=false.\n"
-        "Do NOT identify the car number; judge only the track state. Note whether other cars are "
-        "moving (feed live).\n"
+        "Note whether other cars are moving (feed live).\n"
         'Respond with a single JSON object: {"blockage": bool, "cleared": bool, '
-        '"panel": "TL|TR|BL|BR|none", "feed_live": bool, "what_you_see": str, "confidence": number}'
+        '"panel": "TL|TR|BL|BR|none", "feed_live": bool, '
+        '"seen_car": <the stopped car\'s number if you can clearly read it, else null>, '
+        '"what_you_see": str, "confidence": number}'
     )
 
 
@@ -159,7 +186,7 @@ class VideoVerifier:
         return [p.title() for p in group_id.split("_") if p.lower().startswith("cam")]
 
     # -- one group -----------------------------------------------------------
-    async def _verify_group(self, group_id: str, t: int, lead: int, tail: int) -> dict:
+    async def _verify_group(self, group_id: str, t: int, lead: int, tail: int, cars=None) -> dict:
         from google.genai import types
         from shared.gemini import aretry_call
         start, end = max(0, t - lead), t + tail
@@ -170,7 +197,7 @@ class VideoVerifier:
         resp = await aretry_call(lambda: self._client.aio.models.generate_content(
             model=self.model,
             contents=[types.Content(role="user",
-                                    parts=[vpart, types.Part(text=_prompt(cams, t, start, end))])],
+                                    parts=[vpart, types.Part(text=_prompt(cams, t, start, end, cars))])],
             config=types.GenerateContentConfig(temperature=0.2,
                                                response_mime_type="application/json"),
         ), what="verify")
@@ -182,12 +209,16 @@ class VideoVerifier:
         return d
 
     # -- sweep + aggregate ---------------------------------------------------
-    async def verify(self, race_time_s: int, *, lead: int = LEAD_S, tail: int = TAIL_S) -> VideoVerdict:
-        """Sweep every camera group CONCURRENTLY; return the aggregated verdict."""
+    async def verify(self, race_time_s: int, *, cars=None,
+                     lead: int = LEAD_S, tail: int = TAIL_S) -> VideoVerdict:
+        """Sweep every camera group CONCURRENTLY; return the aggregated verdict.
+
+        `cars` = the telemetry car number(s) for this stop, used as a livery/number
+        hint so the description can cross-check identity (not the safety verdict)."""
         self._ensure_client()
         t = int(race_time_s)
         results = await asyncio.gather(
-            *[self._verify_group(g, t, lead, tail) for g in self.groups],
+            *[self._verify_group(g, t, lead, tail, cars) for g in self.groups],
             return_exceptions=True,
         )
         per_group, blocked, cleared = {}, [], []
@@ -225,12 +256,15 @@ def main() -> int:
     ap.add_argument("--lead", type=int, default=LEAD_S)
     ap.add_argument("--tail", type=int, default=TAIL_S)
     ap.add_argument("--model", default=None)
+    ap.add_argument("--cars", default=None,
+                    help="comma-separated car number(s) for the livery hint, e.g. 7 or 48,7")
     ap.add_argument("--out", default=None,
                     help="append the verdict (JSON line) to this file, e.g. ~/fe_verifier_results.jsonl")
     args = ap.parse_args()
 
+    cars = [int(c) for c in args.cars.split(",")] if args.cars else None
     v = VideoVerifier(bucket=args.bucket, base=args.base, model=args.model)
-    verdict = asyncio.run(v.verify(args.at, lead=args.lead, tail=args.tail))
+    verdict = asyncio.run(v.verify(args.at, cars=cars, lead=args.lead, tail=args.tail))
     print(f"\nVERDICT: {verdict.state.upper()}"
           + (f"  cameras={verdict.cameras}  conf={verdict.confidence}" if verdict.blocked else "")
           + (f"  conf={verdict.confidence}" if verdict.cleared else ""))
