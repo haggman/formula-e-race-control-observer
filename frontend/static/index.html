@@ -53,7 +53,12 @@
   .feed{overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px}
   .item{background:var(--panel2);border:1px solid var(--edge);border-left:3px solid var(--edge);
         border-radius:6px;padding:6px 9px;font-size:12.5px}
-  .item .meta{color:var(--dim);font-size:11px;display:flex;gap:8px;margin-bottom:2px}
+  .item .meta{color:var(--dim);font-size:11px;display:flex;gap:8px;align-items:center;margin-bottom:2px}
+  /* car chip — number in a team-coloured circle, shared across all columns */
+  .carchip{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;
+           border-radius:50%;font-size:10px;font-weight:800;color:#fff;padding:0 4px;
+           box-shadow:0 0 0 1px rgba(255,255,255,.2) inset;text-shadow:0 1px 1px rgba(0,0,0,.4)}
+  .who{display:flex;gap:5px;align-items:center}
   .col.tele .item{border-left-color:var(--tele)} .col.video .item{border-left-color:var(--video)}
   /* recommendation cards */
   .rec{background:var(--panel2);border:1px solid var(--edge);border-radius:8px;padding:10px;
@@ -146,6 +151,16 @@ let activeJump=null;       // currently-selected jump button
 function fmtClock(s){if(s==null)return '—';const d=new Date((GREEN_FLAG+s)*1000);
   return d.toISOString().substr(11,8);}
 
+// team colours by car number → shared "car chips" across all three columns
+const CAR_COLORS={1:'#3a6fd4',17:'#3a6fd4', 2:'#b9962e',25:'#b9962e', 3:'#7a8791',33:'#7a8791',
+  4:'#2fb457',16:'#2fb457', 5:'#ff7a00',8:'#ff7a00', 7:'#16407a',18:'#16407a',
+  9:'#0a9ea0',37:'#0a9ea0', 11:'#b87333',51:'#b87333', 13:'#a01c2e',94:'#a01c2e',
+  21:'#d4522a',48:'#d4522a', 22:'#d1122b',23:'#d1122b'};
+function carChip(n){
+  if(n==null||n==='') return '';
+  return `<span class="carchip" style="background:${CAR_COLORS[+n]||'#5b6b7d'}">${n}</span>`;
+}
+
 // Load the jump points (from the track geometry file) and build the jump buttons.
 async function initJumps(){
   const geom=await (await fetch('/static/track_geometry.json')).json();
@@ -173,10 +188,11 @@ function addFeed(id,cls,meta,body,ts){
 function onObservation(o){
   const t=o.ts_utc.substr(11,8);
   if(o.modality==='telemetry'){
-    addFeed('teleFeed','tele',`${t} · car ${o.car_number??'?'} · sev ${o.severity}`,
+    addFeed('teleFeed','tele',`${carChip(o.car_number)} ${t} · sev ${o.severity}`,
       `${o.signal.replace(/_/g,' ')} — ${o.summary}`,o.ts_utc);
   }else{
-    addFeed('videoFeed','video',`${t} · ${o.camera_id||'cam'} · sev ${o.severity}`,o.summary,o.ts_utc);
+    const chips=(o.cars||[]).map(carChip).join('');
+    addFeed('videoFeed','video',`${chips} ${t} · ${o.camera_id||'cam'} · sev ${o.severity}`,o.summary,o.ts_utc);
   }
 }
 
@@ -199,6 +215,7 @@ function pushBeat(p){
   const cars=(inc.car_numbers||[]).map(c=>'#'+c).join('/');
   const kind=p.kind||'NEW';
   const corr=inc.corroborated||inc.video_verdict==='blocked';
+  const chips=(inc.car_numbers||[]).map(carChip).join('')||'incident';
   const prev=recEls[id], prevFlag=prev?prev.dataset.flag:null;
   if(prev) supersede(prev);                                   // dim the earlier beat
   const upd = prev ? `<span class="upd">↻ update${prevFlag&&prevFlag!=='NONE'?' · was '+prevFlag.replace(/_/g,' '):''}</span>` : '';
@@ -210,7 +227,7 @@ function pushBeat(p){
     card.innerHTML=
       `<div class="top"><span class="flag CLEARED">CLEARED</span>`+
       `<span class="kind CLEARED">VIDEO VETO</span>${upd}</div>`+
-      `<div><b>${cars||'incident'}</b> — stood down, no flag</div>`+
+      `<div class="who">${chips} — stood down, no flag</div>`+
       `<div class="narr">${r.narrative}</div>`;
   }else{
     const dec = inc.approved===true?true : inc.approved===false?false : undefined;
@@ -228,7 +245,7 @@ function pushBeat(p){
       `<span class="kind ${kind}">${kind}</span>${upd}`+
       (corr?`<span class="corr">✓ corroborated by video</span>`:``)+
       sevBadge(inc.severity)+
-      `</div><div class="who"><b>${cars||'incident'}</b></div>`+
+      `</div><div class="who">${chips}</div>`+
       `<div class="narr">${r.narrative}</div>`+tail;
   }
   const recs=document.getElementById('recs');

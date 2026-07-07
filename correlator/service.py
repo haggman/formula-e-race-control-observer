@@ -153,12 +153,12 @@ class CorrelatorService:
             self._verify[key].update(verdict=verdict.state, note=verdict.description)
             logger.info("video verdict @%ds → %s%s", stop_time, verdict.state.upper(),
                         f" ({', '.join(verdict.cameras)})" if verdict.cameras else "")
-            self._publish_verification(stop_time, verdict)   # → console Video Agent feed
+            self._publish_verification(stop_time, verdict, cars)   # → console Video Agent feed
         except Exception as e:
             logger.warning("verification failed @%ds: %s", stop_time, e)
             self._verify[key]["triggered"] = False          # allow a retry next tick
 
-    def _publish_verification(self, stop_time: int, verdict) -> None:
+    def _publish_verification(self, stop_time: int, verdict, cars=None) -> None:
         """Emit the verifier's read as a video Observation so the console's Video
         Agent feed shows it (one clean line per stop, not the old per-frame spam).
         The correlator ignores video obs in its own buffer, so this can't loop."""
@@ -174,9 +174,10 @@ class CorrelatorService:
                 ts_utc=GREEN_FLAG + timedelta(seconds=stop_time),
                 confidence=float(verdict.confidence or 0.5),
                 severity_hint=(85 if verdict.state == "blocked" else 10),
+                car_number=(cars[0] if cars else None),
                 location=TrackLocation(camera_id=cam),
                 summary=f"[{label}] {verdict.description}",
-                evidence={"verifier": True, "verdict": verdict.state}))
+                evidence={"verifier": True, "verdict": verdict.state, "cars": list(cars or [])}))
         except Exception as e:
             logger.warning("verification publish skipped (%s)", e)
 

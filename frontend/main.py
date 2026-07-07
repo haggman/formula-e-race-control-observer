@@ -71,6 +71,7 @@ def _on_observation(obs) -> None:
         "severity": obs.severity_hint, "confidence": obs.confidence,
         "camera_id": loc.camera_id, "gps": ([loc.gps_lat, loc.gps_lng]
                                             if loc.gps_lat is not None else None),
+        "cars": obs.evidence.get("cars", []),   # flagged car(s), for the car chips
         "summary": obs.summary,
     }})
 
