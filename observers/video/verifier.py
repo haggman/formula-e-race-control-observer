@@ -156,14 +156,17 @@ class VideoVerifier:
             logger.info("prepared mosaic %s (%d frames)", group_id, ms.max_second + 1)
         return ms
 
-    def warmup(self) -> None:
+    def warmup(self, on_progress=None) -> None:
         """Download + extract every group's mosaic up front, so verifications never
-        pull anything at request time."""
+        pull anything at request time. `on_progress(done, total)` is called after
+        each group (used to surface warm-up progress in the console)."""
         n = len(self.groups)
         logger.info("warming %d mosaics locally…", n)
         for i, g in enumerate(self.groups, 1):
             self._mosaic(g)
             logger.info("  mosaic %d/%d ready", i, n)
+            if on_progress:
+                on_progress(i, n)
         logger.info("✅ all %d mosaics local — verifier ready, no downloads at request time", n)
 
     def _cams(self, ms: MosaicSource, group_id: str) -> list[str]:

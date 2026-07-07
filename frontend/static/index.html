@@ -43,6 +43,11 @@
           border-bottom:1px solid var(--edge);color:var(--dim)}
   .col.tele h2{color:var(--tele)} .col.video h2{color:var(--video)}
   .col.recs h2{color:var(--ink);font-size:13px}
+  .col h2{display:flex;align-items:center;gap:8px}
+  /* per-agent online indicator in each feed header */
+  .stat{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.5px;
+        text-transform:none;color:#6b7a89}
+  .stat.on{color:var(--green)} .stat.warming{color:var(--dbl)} .stat.off{color:#6b7a89}
   /* Race Control is the decision surface — give its cards a bit more presence */
   .col.recs .feed{gap:9px;padding:11px}
   .feed{overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px}
@@ -68,6 +73,11 @@
   .kind.ESCALATION{color:var(--sc);border-color:var(--sc)}
   .kind.CONFIRMED{color:var(--green);border-color:var(--green)}
   .kind.CLEARED{color:var(--green);border-color:var(--green)}
+  .upd{font-size:10px;letter-spacing:.5px;color:var(--dbl);border:1px solid var(--dbl);
+       padding:1px 6px;border-radius:10px;text-transform:uppercase}
+  .rec.superseded{opacity:.5}
+  .rec.superseded .narr{display:none}          /* keep superseded beats compact */
+  .rec.isupdate{border-left-style:dashed}
   .corr{margin-left:auto;font-size:11px;color:var(--green);font-weight:700}
   .rec .narr{color:#c7d4e0;font-size:12.5px;margin:5px 0 8px}
   .btns{display:flex;gap:8px}
@@ -104,10 +114,10 @@
 
 <div class="wrap">
   <div class="agents">
-    <div class="col tele"><h2>▸ Telemetry Agent</h2><div class="feed" id="teleFeed"></div></div>
-    <div class="col video"><h2>▸ Video Agent</h2><div class="feed" id="videoFeed"></div></div>
+    <div class="col tele"><h2>▸ Telemetry Agent <span class="stat off" id="st-telemetry">● offline</span></h2><div class="feed" id="teleFeed"></div></div>
+    <div class="col video"><h2>▸ Video Agent <span class="stat off" id="st-video">● offline</span></h2><div class="feed" id="videoFeed"></div></div>
   </div>
-  <div class="col recs"><h2>◆ Race Control — Recommendations</h2><div class="feed" id="recs"></div></div>
+  <div class="col recs"><h2>◆ Race Control — Recommendations <span class="stat off" id="st-correlator">● offline</span></h2><div class="feed" id="recs"></div></div>
 </div>
 
 <div class="bar">
@@ -164,76 +174,85 @@ function onObservation(o){
   }
 }
 
-// ---- incidents / recommendations ----
-const lastPayload={}, decided={}, decidedRank={};   // id -> payload ; approved(bool) ; flag rank decided at
-const RANK={NONE:0,YELLOW:1,DOUBLE_YELLOW:2,SAFETY_CAR:3,RED:4};
-
-function renderCard(p){
+// ---- incidents / recommendations (a STACK of beats) ----
+// recEls[id] = the LATEST card for an incident. Each correlator beat
+// (NEW/ESCALATION/CONFIRMED/CLEARED) is pushed as a NEW card on top; the prior
+// one is dimmed (superseded) so the whole progression stays visible.
+function supersede(card){
+  if(!card) return;
+  card.classList.add('superseded');
+  const b=card.querySelector('.btns'); if(b) b.remove();      // no longer actionable
+}
+function pushBeat(p){
   const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
   const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
   const kind=p.kind||'NEW';
-  let card=recEls[id];
-  if(!card){card=document.createElement('div');recEls[id]=card;
-            document.getElementById('recs').prepend(card);}
-  // Video veto: telemetry saw a stop but CCTV shows it cleared → stand-down card, no buttons
+  const corr=inc.corroborated||inc.video_verdict==='blocked';
+  const prev=recEls[id], prevFlag=prev?prev.dataset.flag:null;
+  if(prev) supersede(prev);                                   // dim the earlier beat
+  const upd = prev ? `<span class="upd">↻ update${prevFlag&&prevFlag!=='NONE'?' · was '+prevFlag.replace(/_/g,' '):''}</span>` : '';
+  const card=document.createElement('div');
+  card.dataset.flag=flag; card.dataset.cars=cars||'incident';
+
   if(kind==='CLEARED'){
-    card.className='rec cleared'; card.dataset.flag='NONE'; card.dataset.cars=cars||'incident';
+    card.className='rec cleared'+(prev?' isupdate':'');
     card.innerHTML=
       `<div class="top"><span class="flag CLEARED">CLEARED</span>`+
-      `<span class="kind CLEARED">VIDEO VETO</span></div>`+
+      `<span class="kind CLEARED">VIDEO VETO</span>${upd}</div>`+
       `<div><b>${cars||'incident'}</b> — stood down, no flag</div>`+
       `<div class="narr">${r.narrative}</div>`;
-    return;
+  }else{
+    const dec = inc.approved===true?true : inc.approved===false?false : undefined;
+    const tail = dec===true
+        ? `<div class="decided" style="color:var(--green)">✓ APPROVED — ${flag.replace(/_/g,' ')} deployed</div>`
+      : dec===false
+        ? `<div class="decided" style="color:#ff9a9a">✕ rejected — no flag deployed</div>`
+      : (flag!=='NONE'
+        ? `<div class="btns"><button class="btn ok" onclick="decide('${id}','approve')">Approve — deploy ${flag.replace(/_/g,' ')}</button>`+
+          `<button class="btn no" onclick="decide('${id}','reject')">Reject</button></div>`
+        : '');
+    card.className='rec '+flag+(prev?' isupdate':'')+(dec!==undefined?' approved':'');
+    card.innerHTML=
+      `<div class="top"><span class="flag ${flag}">${flag.replace(/_/g,' ')}</span>`+
+      `<span class="kind ${kind}">${kind}</span>${upd}`+
+      (corr?`<span class="corr">✓ corroborated by video</span>`:``)+
+      `</div><div><b>${cars||'incident'}</b> — ${r.headline.replace(/^\[.*?\]\s*/,'')}</div>`+
+      `<div class="narr">${r.narrative}</div>`+tail;
   }
-  card.dataset.flag=flag; card.dataset.cars=cars||'incident';
-  // decision state: a local click wins; else fall back to Firestore's inc.approved
-  const dec=(id in decided)?decided[id]
-           :(inc.approved===true?true:inc.approved===false?false:undefined);
-  card.className='rec '+flag+(dec!==undefined?' approved':'');
-  const tail = dec===true
-      ?`<div class="decided" style="color:var(--green)">✓ APPROVED — ${flag.replace(/_/g,' ')} deployed</div>`
-    : dec===false
-      ?`<div class="decided" style="color:#ff9a9a">✕ rejected — no flag deployed</div>`
-      :`<div class="btns"><button class="btn ok" onclick="decide('${id}','approve')">Approve — deploy ${flag.replace(/_/g,' ')}</button>`+
-       `<button class="btn no" onclick="decide('${id}','reject')">Reject</button></div>`;
-  card.innerHTML=
-    `<div class="top"><span class="flag ${flag}">${flag.replace(/_/g,' ')}</span>`+
-    `<span class="kind ${kind}">${kind}</span>`+
-    ((inc.corroborated||inc.video_verdict==='blocked')?`<span class="corr">✓ corroborated by video</span>`:``)+
-    `</div><div><b>${cars||'incident'}</b> — ${r.headline.replace(/^\[.*?\]\s*/,'')}</div>`+
-    `<div class="narr">${r.narrative}</div>`+tail;
+  document.getElementById('recs').prepend(card);
+  recEls[id]=card;
 }
 
 function onIncident(p){
   const r=p.report, inc=r.incident, id=inc.incident_id, flag=r.recommendation.flag;
   const cars=(inc.car_numbers||[]).map(c=>'#'+c).join(' ');
   const kind=p.kind||'NEW';
-  const rk=RANK[flag]??0;
-  // Video veto: show the stand-down (even though its flag is NONE) and update the card in place
+  if(flag==='NONE' && kind!=='CLEARED') return;   // note-and-monitor: off the decision surface
+  pushBeat(p);
+  if(kind==='SNAPSHOT') return;                    // don't banner stale Firestore replays
+  const ban=document.getElementById('banner');
   if(kind==='CLEARED'){
-    lastPayload[id]=p; renderCard(p);
-    const ban=document.getElementById('banner');
     ban.style.display='block'; ban.style.background='#16351f'; ban.style.color='#c9f5d9';
     ban.textContent=`STOOD DOWN: ${cars} — video verification cleared it, no flag`;
-    return;
+  }else{
+    ban.style.display='block'; ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)'; ban.style.color='#160000';
+    ban.textContent=`${kind}: ${cars} — RECOMMEND ${flag.replace(/_/g,' ')}`+((inc.corroborated||inc.video_verdict==='blocked')?' · CORROBORATED':'');
   }
-  // NONE = "note and monitor", not a flag — keep it off the decision surface entirely
-  if(flag==='NONE') return;
-  // Already decided at this level (or higher)? Stay quiet. A genuine escalation
-  // ABOVE the decided level reopens the incident for a fresh decision.
-  if(id in decidedRank){
-    if(rk<=decidedRank[id]) return;
-    delete decidedRank[id]; delete decided[id];   // escalated → reopen
-  }
-  lastPayload[id]=p;
-  renderCard(p);
-  // banner: live beats only — skip stale snapshots, and don't stomp a deployed flag
-  if(kind!=='SNAPSHOT' && !(id in decided)){
-    const ban=document.getElementById('banner');
-    ban.style.display='block'; ban.style.background=flag==='SAFETY_CAR'?'var(--sc)':'var(--dbl)';
-    ban.style.color='#160000';
-    ban.textContent=`${kind}: ${cars} — RECOMMEND ${flag.replace(/_/g,' ')}`+(inc.corroborated?' · CORROBORATED':'');
-  }
+}
+
+// ---- agent online indicators ----
+function setStat(elId, s){
+  const e=document.getElementById(elId); if(!e) return;
+  if(!s || !s.online){ e.className='stat off'; e.textContent='● offline'; return; }
+  if(s.state==='warming'){ e.className='stat warming'; e.textContent='● warming '+(s.detail||''); return; }
+  if(s.state==='ready'){ e.className='stat on'; e.textContent='● ready'; return; }
+  e.className='stat on'; e.textContent='● online';
+}
+function onAgents(a){
+  a=a||{};
+  setStat('st-telemetry', a.telemetry);
+  setStat('st-video', a.video);
+  setStat('st-correlator', a.correlator);
 }
 
 // ---- race clock ----
@@ -248,8 +267,8 @@ function onCars(m){
 // ---- controls ----
 async function ctl(p){await fetch('/control/'+p,{method:'POST'});pollStatus();}
 async function jump(t,btn,pauseAt){
-  if(btn){jumpEls.forEach(b=>b.classList.remove('active'));btn.classList.add('active');activeJump=btn;}
-  resetBoard();                          // fresh slate for the new scenario (clears pendingPauseAt)
+  resetBoard();                          // fresh slate (also clears any stale jump highlight)
+  if(btn){btn.classList.add('active');activeJump=btn;}        // highlight THIS incident
   pendingPauseAt=(pauseAt!=null && pauseAt>t)?pauseAt:null;   // auto-pause at window end
   await fetch('/control/jump',{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});
@@ -257,31 +276,36 @@ async function jump(t,btn,pauseAt){
 }
 async function autoPause(){
   await fetch('/control/pause',{method:'POST'});   // reached the end of the incident window
+  if(activeJump){activeJump.classList.remove('active');activeJump=null;}  // incident done → drop highlight
   pollStatus();
 }
 async function decide(id,d){
   applyDecision(id, d==='approve');                       // instant, optimistic feedback
   try{await fetch(`/incident/${id}/${d}`,{method:'POST'});}catch(e){}
 }
-// Close the loop: clear the card from the queue, and on approval put the flag
-// "out" — set the track-condition pill + banner so the whole board shows the state.
+// Mark the latest beat decided in place (stays in the stack as history) and, on
+// approval, put the flag "out" — set the track-condition pill.
 function applyDecision(id,approved){
-  if(id in decidedRank) return;                           // already decided (idempotent WS echo)
   const card=recEls[id];
-  const flag=card?card.dataset.flag:'NONE', cars=card?card.dataset.cars:'';
-  decided[id]=approved; decidedRank[id]=RANK[flag]??0;
-  if(approved) setCondition(flag,cars);
-  if(card){ card.classList.add('gone');                   // fade out, then drop from the queue
-    setTimeout(()=>card.remove(),280); }
-  delete recEls[id];                                      // so a later escalation makes a fresh card
+  if(!card || card.querySelector('.decided')) return;    // idempotent (WS echo)
+  const flag=card.dataset.flag, cars=card.dataset.cars;
+  const b=card.querySelector('.btns'); if(b) b.remove();
+  card.classList.add('approved');
+  const n=document.createElement('div'); n.className='decided';
+  if(approved){ n.style.color='var(--green)'; n.textContent=`✓ APPROVED — ${flag.replace(/_/g,' ')} deployed`; setCondition(flag,cars); }
+  else { n.style.color='#ff9a9a'; n.textContent='✕ rejected — no flag deployed'; }
+  card.appendChild(n);
 }
 // Reset the visible board for a fresh scenario (does not touch the sim).
 function resetBoard(){
-  pendingPauseAt=null;                   // cancel any armed auto-pause
-  Object.values(recEls).forEach(c=>c.remove());
-  [recEls,lastPayload,decided,decidedRank].forEach(o=>{for(const k in o)delete o[k];});
+  pendingPauseAt=null;                                    // cancel any armed auto-pause
+  document.getElementById('recs').innerHTML='';          // clear the recommendation stack
+  for(const k in recEls) delete recEls[k];
+  document.getElementById('teleFeed').innerHTML='';      // clear the sensor feeds too
+  document.getElementById('videoFeed').innerHTML='';
   document.getElementById('banner').style.display='none';
   const cond=document.getElementById('cond'); cond.className='GREEN'; cond.textContent='● GREEN';
+  jumpEls.forEach(b=>b.classList.remove('active')); activeJump=null;   // clear stale jump highlight
 }
 async function clearBoard(){ resetBoard(); try{await fetch('/incidents/clear',{method:'POST'});}catch(e){} }
 async function restart(){ resetBoard(); try{await fetch('/incidents/clear',{method:'POST'});}catch(e){} await ctl('restart'); }
@@ -319,6 +343,7 @@ function connect(){
     else if(m.type==='cars')onCars(m);
     else if(m.type==='decision'){applyDecision(m.incident_id, m.approved);}
     else if(m.type==='cleared'){resetBoard();}
+    else if(m.type==='agents'){onAgents(m.agents);}
   };
   setInterval(()=>{try{ws.send('ping')}catch(e){}},15000);
 }

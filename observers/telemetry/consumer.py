@@ -191,9 +191,14 @@ def run(
         future = subscriber.subscribe(sub_path, callback=callback, flow_control=flow)
         logger.info("telemetry observer online — pulling %s", subscription)
 
+        from shared.heartbeat import Heartbeat
+        hb = Heartbeat("telemetry", project=project)
+        hb.set("online"); hb.start()
+
         while sess.active():
             sess.wait(1.0)
 
+        hb.stop()
         future.cancel()
         try:
             future.result(timeout=10)

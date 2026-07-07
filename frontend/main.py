@@ -131,12 +131,38 @@ async def _poll_cars() -> None:
         await asyncio.sleep(1.0)
 
 
+async def _poll_agents() -> None:
+    """Poll agent_status heartbeats → push per-agent online/warming state at ~0.5 Hz."""
+    import time as _t
+    try:
+        from google.cloud import firestore
+        db = firestore.Client(project=PROJECT_ID)
+    except Exception as e:
+        logger.warning("Firestore unavailable — no agent status (%s)", e)
+        return
+    while True:
+        try:
+            now = int(_t.time())
+            agents = {}
+            for d in db.collection("agent_status").stream():
+                x = d.to_dict()
+                agents[x.get("name", d.id)] = {
+                    "state": x.get("state", "?"), "detail": x.get("detail", ""),
+                    "online": (now - int(x.get("updated_at_unix", 0))) < 15,
+                }
+            _push({"type": "agents", "agents": agents})
+        except Exception as e:
+            logger.debug("agent poll: %s", e)
+        await asyncio.sleep(2.0)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     global _loop
     _loop = asyncio.get_running_loop()
     asyncio.create_task(_broadcaster())
     asyncio.create_task(_poll_cars())
+    asyncio.create_task(_poll_agents())
     if PROJECT_ID:
         observation_bus.subscribe(_on_observation, project=PROJECT_ID,
                                   subscription="fe-observations-console-sub")

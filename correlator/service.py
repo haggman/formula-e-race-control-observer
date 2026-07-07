@@ -22,13 +22,13 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.models import (CorrelatedIncident, FlagType, IncidentReport,     # noqa: E402
-                           Modality, Observation, SignalType)
+                           Modality, Observation, SignalType, TrackLocation)
 from shared.lifecycle import Session                                                 # noqa: E402
 from shared import observation_bus                                                    # noqa: E402
 from observers.video.clock import SimClock                                           # noqa: E402
@@ -86,6 +86,7 @@ class CorrelatorService:
         self._announced: dict[tuple, tuple[int, str | None, bool]] = {}
         self._db = None
         self._incident_pub = None                             # set in run() → fe-incidents
+        self._obs_pub = None                                  # set in run() → fe-observations (video feed)
         # -- video verification --
         self.verifier = verifier                              # VideoVerifier or None
         self._clock = SimClock(sim_url) if sim_url else None  # to time the forward window
@@ -148,9 +149,32 @@ class CorrelatorService:
             self._verify[key].update(verdict=verdict.state, note=verdict.description)
             logger.info("video verdict @%ds → %s%s", stop_time, verdict.state.upper(),
                         f" ({', '.join(verdict.cameras)})" if verdict.cameras else "")
+            self._publish_verification(stop_time, verdict)   # → console Video Agent feed
         except Exception as e:
             logger.warning("verification failed @%ds: %s", stop_time, e)
             self._verify[key]["triggered"] = False          # allow a retry next tick
+
+    def _publish_verification(self, stop_time: int, verdict) -> None:
+        """Emit the verifier's read as a video Observation so the console's Video
+        Agent feed shows it (one clean line per stop, not the old per-frame spam).
+        The correlator ignores video obs in its own buffer, so this can't loop."""
+        if self._obs_pub is None:
+            return
+        cam = verdict.cameras[0] if verdict.cameras else None
+        label = {"blocked": "CONFIRMED — track blocked",
+                 "cleared": "CLEARED — car recovered, line clear",
+                 "unseen": "no CCTV view of this stop"}.get(verdict.state, verdict.state)
+        try:
+            self._obs_pub.publish(Observation(
+                modality=Modality.VIDEO, signal=SignalType.STATIONARY_CAR_VISUAL,
+                ts_utc=GREEN_FLAG + timedelta(seconds=stop_time),
+                confidence=float(verdict.confidence or 0.5),
+                severity_hint=(85 if verdict.state == "blocked" else 10),
+                location=TrackLocation(camera_id=cam),
+                summary=f"[{label}] {verdict.description}",
+                evidence={"verifier": True, "verdict": verdict.state}))
+        except Exception as e:
+            logger.warning("verification publish skipped (%s)", e)
 
     # -- fuse + announce -----------------------------------------------------
     def tick(self) -> list[IncidentReport]:
@@ -224,23 +248,43 @@ def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
         svc._incident_pub = observation_bus.IncidentPublisher(project)
     except Exception as e:
         logger.warning("fe-incidents publisher unavailable (%s) — console live feed off", e)
+    try:
+        svc._obs_pub = observation_bus.ObservationPublisher(project)   # verifier → Video feed
+    except Exception as e:
+        logger.warning("fe-observations publisher unavailable (%s) — Video feed off", e)
 
+    from shared.heartbeat import Heartbeat
+    hb_corr = Heartbeat("correlator", project=project); hb_corr.set("online"); hb_corr.start()
+    hb_video = None
     if verify:
         try:
             from observers.video.verifier import VideoVerifier
             svc.verifier = VideoVerifier()                  # sweeps all groups on a stop
-            threading.Thread(target=svc.verifier.warmup, daemon=True,
-                             name="verifier-warmup").start()
+            hb_video = Heartbeat("video", project=project)
+            hb_video.set("warming", "0/%d" % len(svc.verifier.groups)); hb_video.start()
+
+            def _warm(hb=hb_video, v=svc.verifier):
+                try:
+                    v.warmup(on_progress=lambda i, n: hb.set("warming", f"{i}/{n}"))
+                    hb.set("ready")
+                except Exception as e:                      # noqa: BLE001
+                    logger.warning("verifier warm-up failed (%s)", e); hb.set("offline")
+            threading.Thread(target=_warm, daemon=True, name="verifier-warmup").start()
             logger.info("video verifier armed (%d groups; warming mosaics in background)",
                         len(svc.verifier.groups))
         except Exception as e:
             logger.warning("video verifier unavailable (%s) — telemetry-only", e)
+            if hb_video:
+                hb_video.set("offline")
 
     with Session(max_runtime_s=max_runtime_s, idle_timeout_s=idle_timeout_s,
                  name="correlator") as sess:
         def on_obs(obs: Observation) -> None:
             sess.touch()
-            svc.add(obs)
+            # Only telemetry drives fusion. Video obs on the bus are the verifier's
+            # OWN published verdicts (for the console feed) — don't re-ingest them.
+            if obs.modality == Modality.TELEMETRY:
+                svc.add(obs)
 
         subscriber, future = observation_bus.subscribe(on_obs, project=project)
         logger.info("correlator online — fusing observations")
@@ -258,6 +302,9 @@ def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
         except Exception:
             pass
         subscriber.close()
+    hb_corr.stop()
+    if hb_video:
+        hb_video.stop()
     return sess.stop_reason or "stopped"
 
 
