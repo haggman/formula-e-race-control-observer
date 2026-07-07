@@ -219,7 +219,9 @@ function pushBeat(p){
       `</div><div><b>${cars||'incident'}</b> — ${r.headline.replace(/^\[.*?\]\s*/,'')}</div>`+
       `<div class="narr">${r.narrative}</div>`+tail;
   }
-  document.getElementById('recs').prepend(card);
+  const recs=document.getElementById('recs');
+  recs.appendChild(card);                  // newest at the BOTTOM (matches the sensor feeds)
+  recs.scrollTop=recs.scrollHeight;        // follow the latest beat
   recEls[id]=card;
 }
 
@@ -272,11 +274,15 @@ async function jump(t,btn,pauseAt){
   pendingPauseAt=(pauseAt!=null && pauseAt>t)?pauseAt:null;   // auto-pause at window end
   await fetch('/control/jump',{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({race_time_s:t})});
+  applyStatus({paused:false});           // jump auto-plays from here — reflect it right away
   pollStatus();
 }
 async function autoPause(){
   await fetch('/control/pause',{method:'POST'});   // reached the end of the incident window
   if(activeJump){activeJump.classList.remove('active');activeJump=null;}  // incident done → drop highlight
+  const ban=document.getElementById('banner');     // clear "window complete" indicator
+  ban.style.display='block'; ban.style.background='#1b2a3a'; ban.style.color='#cfe0f0';
+  ban.textContent='⏸ Incident window complete — simulator paused. Press ▶ Resume to continue.';
   pollStatus();
 }
 async function decide(id,d){

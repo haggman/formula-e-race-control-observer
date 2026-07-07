@@ -113,12 +113,17 @@ class CorrelatorService:
         return s.race_time_s if s.reachable else None
 
     def _stop_time(self, inc: CorrelatedIncident) -> float | None:
-        """Race-second of the earliest telemetry trigger in this incident."""
-        tele = [o for o in inc.observations
-                if o.modality == Modality.TELEMETRY and o.signal in _VERIFY_TRIGGERS]
-        if not tele:
+        """Race-second to verify. Prefer the actual STOP (that's the blockage to
+        confirm); only fall back to a hint (yaw/decel) if the incident has no stop.
+        Otherwise a merged incident (e.g. a nearby yaw spike + a real stop) would
+        verify the transient's moment and contradict the recommendation."""
+        tele = [o for o in inc.observations if o.modality == Modality.TELEMETRY]
+        stops = [o for o in tele
+                 if o.signal in (SignalType.STOPPED_CAR, SignalType.PROLONGED_STOP)]
+        src = stops or [o for o in tele if o.signal in _VERIFY_TRIGGERS]
+        if not src:
             return None
-        return (min(o.ts_utc for o in tele) - GREEN_FLAG).total_seconds()
+        return (min(o.ts_utc for o in src) - GREEN_FLAG).total_seconds()
 
     def _maybe_verify(self, inc: CorrelatedIncident, key: tuple) -> None:
         """Attach a ready verdict; otherwise trigger the CCTV check once the
