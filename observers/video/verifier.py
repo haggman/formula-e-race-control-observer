@@ -209,29 +209,23 @@ class VideoVerifier:
         return d
 
     # -- sweep + aggregate ---------------------------------------------------
-    async def verify(self, race_time_s: int, *, cars=None,
-                     lead: int = LEAD_S, tail: int = TAIL_S) -> VideoVerdict:
-        """Sweep every camera group CONCURRENTLY; return the aggregated verdict.
-
-        `cars` = the telemetry car number(s) for this stop, used as a livery/number
-        hint so the description can cross-check identity (not the safety verdict)."""
-        self._ensure_client()
-        t = int(race_time_s)
+    async def _sweep(self, t: int, lead: int, tail: int, cars) -> dict:
+        """One concurrent all-groups sweep at race-second t; return per-group replies."""
         results = await asyncio.gather(
             *[self._verify_group(g, t, lead, tail, cars) for g in self.groups],
-            return_exceptions=True,
-        )
-        per_group, blocked, cleared = {}, [], []
+            return_exceptions=True)
+        per_group = {}
         for r in results:
             if isinstance(r, Exception):
                 logger.warning("group verify failed: %s", r)
                 continue
             per_group[r["group"]] = r
-            if r.get("blockage"):
-                blocked.append(r)
-            elif r.get("cleared"):
-                cleared.append(r)
+        return per_group
 
+    @staticmethod
+    def _aggregate(per_group: dict) -> VideoVerdict:
+        blocked = [r for r in per_group.values() if r.get("blockage")]
+        cleared = [r for r in per_group.values() if r.get("cleared")]
         if blocked:
             best = max(blocked, key=lambda r: r.get("confidence", 0) or 0)
             cams = sorted({r.get("camera") for r in blocked if r.get("camera")})
@@ -246,6 +240,18 @@ class VideoVerifier:
                                 confidence=float(best.get("confidence", 0) or 0),
                                 per_group=per_group)
         return VideoVerdict(state="unseen", per_group=per_group)
+
+    async def verify(self, race_time_s: int, *, cars=None,
+                     lead: int = LEAD_S, tail: int = TAIL_S) -> VideoVerdict:
+        """Sweep every camera group CONCURRENTLY; return the aggregated verdict.
+
+        `cars` = the telemetry car number(s), used as a livery/number hint so the
+        description can cross-check identity (not the safety verdict). Whether a
+        blockage later CLEARS is handled by the telemetry RECOVERED signal (cheap +
+        deterministic), not by re-querying video."""
+        self._ensure_client()
+        t = int(race_time_s)
+        return self._aggregate(await self._sweep(t, lead, tail, cars))
 
 
 def main() -> int:

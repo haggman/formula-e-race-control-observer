@@ -126,6 +126,8 @@ class SignalType(str, Enum):
                                          # confirmed blockage; escalates on telemetry alone
     HARD_DECEL = "hard_decel"            # abrupt speed loss beyond racing envelope
     YAW_SPIKE = "yaw_spike"              # rotation spike (spin / snap)
+    RECOVERED = "recovered"             # a previously-stopped car is RACING again (not a slow
+                                        # tow) — the blockage it caused has cleared
     # Video-derived
     DEBRIS = "debris"                    # object(s) on the racing surface
     SMOKE_OR_DUST = "smoke_or_dust"      # plume — off-track excursion / contact

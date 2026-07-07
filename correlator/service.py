@@ -196,8 +196,8 @@ class CorrelatorService:
 
             if prev is None:
                 kind = "NEW"
-            elif verdict == "cleared" and rank == 0 and prev[1] != "cleared":
-                kind = "CLEARED"                            # video veto TOOK EFFECT (flag→none)
+            elif rank == 0 and prev[0] > 0 and prev[1] != "cleared":
+                kind = "CLEARED"                            # flag dropped to none: video cleared OR car recovered
             elif rank > prev[0]:
                 kind = "ESCALATION"
             elif verdict == "blocked" and prev[1] != "blocked":
@@ -206,8 +206,8 @@ class CorrelatorService:
                 kind = "CONFIRMED"
             else:
                 continue                                    # nothing new to say
-            self._announced[key] = (max(rank, prev[0] if prev else 0),
-                                    verdict or (prev[1] if prev else None),
+            stored_v = "cleared" if kind == "CLEARED" else (verdict or (prev[1] if prev else None))
+            self._announced[key] = (max(rank, prev[0] if prev else 0), stored_v,
                                     inc.corroborated or (prev[2] if prev else False))
 
             report = reporter.draft_report(inc, llm=self.use_llm)

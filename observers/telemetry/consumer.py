@@ -42,6 +42,7 @@ logger = logging.getLogger("telemetry.observer")
 
 WINDOW_S = 8.0            # rolling per-car window the detector scores
 DEBOUNCE_S = 10.0        # suppress repeats of the same (car, signal)
+RECOVER_SPEED_KMH = 50.0 # a previously-stopped car above this is RACING again (not a slow tow)
 JUMP_GAP_S = 5.0         # a race-time step bigger than this (or backward) = a
                          # /jump or /restart → drop stale per-car state
 
@@ -98,12 +99,27 @@ class TelemetryObserver:
                 self._escalated[car] = True
                 out.append(_prolonged_stop_obs(s, now - self._stop_since[car]))
 
-            # release the stop latch once the car is clearly moving again
-            if buf and buf[-1].speed_kmh > 30:
+            # A previously-stopped car back at RACING speed (not a slow tow) has
+            # recovered — release the latch and emit RECOVERED so the blockage clears.
+            if buf and buf[-1].speed_kmh >= RECOVER_SPEED_KMH:
+                if self._stopped.get(car, False):
+                    out.append(_recovered_obs(buf[-1]))
                 self._stopped[car] = False
                 self._stop_since.pop(car, None)
                 self._escalated[car] = False
         return out
+
+
+def _recovered_obs(s: TelemetrySample) -> Observation:
+    """Build the RECOVERED Observation for a car that is racing again."""
+    from shared.models import Modality, SignalType, TrackLocation
+    return Observation(
+        modality=Modality.TELEMETRY, signal=SignalType.RECOVERED,
+        ts_utc=s.ts_utc, car_number=s.car_number, confidence=0.95, severity_hint=0,
+        location=TrackLocation(gps_lat=s.lat, gps_lng=s.lng),
+        summary=f"car {s.car_number} moving again at {s.speed_kmh:.0f} km/h — recovered, racing",
+        evidence={"speed_kmh": round(s.speed_kmh, 1)},
+    )
 
 
 def _prolonged_stop_obs(s: TelemetrySample, held_s: float) -> Observation:

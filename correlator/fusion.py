@@ -182,6 +182,15 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     stopped_cars = {o.car_number for o in stopped if o.car_number is not None}
     prolonged = any(o.signal == SignalType.PROLONGED_STOP for o in incident.observations)
 
+    # --- Telemetry says the car is racing again → definitively cleared -----
+    # The car's own speed is the strongest possible evidence the blockage is gone,
+    # so this even overrides a PROLONGED_STOP or a video "blocked" read.
+    if any(o.signal == SignalType.RECOVERED for o in incident.observations):
+        who = ", ".join(f"#{c}" for c in sorted(stopped_cars)) or "the car"
+        return FlagRecommendation(
+            flag=FlagType.NONE, turns=turns,
+            rationale=f"Telemetry: {who} is racing again — recovered, no flag.")
+
     # --- Video verification overrides ------------------------------------
     # CLEARED is the whole point of the verifier: telemetry saw a stop, but the
     # CCTV shows the car recovered / the racing line is clear → stand down.
