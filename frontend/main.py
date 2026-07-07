@@ -251,3 +251,11 @@ async def decide(incident_id: str, decision: str):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     _push({"type": "decision", "incident_id": incident_id, "approved": approved})
     return {"ok": True, "incident_id": incident_id, "approved": approved}
+
+
+# --- entrypoint ------------------------------------------------------------
+# `python -m frontend.main` works identically in Cloud Shell (PORT unset → 8080,
+# reachable via Web Preview) and in a Cloud Run container (Cloud Run injects PORT).
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))

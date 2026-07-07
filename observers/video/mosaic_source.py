@@ -30,6 +30,19 @@ def _ffmpeg_bin() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+_GCS = None
+
+
+def _gcs_client():
+    """Cached Storage client. Uses ADC, so it authenticates the same way in Cloud
+    Shell (your creds) and on Cloud Run (the service account) — no gcloud CLI."""
+    global _GCS
+    if _GCS is None:
+        from google.cloud import storage
+        _GCS = storage.Client()
+    return _GCS
+
+
 @dataclass
 class MosaicSource:
     mosaic_ref: str                       # local path or gs:// URI to the group mp4
@@ -42,7 +55,15 @@ class MosaicSource:
 
     def prepare(self) -> "MosaicSource":
         """Localise the mosaic, extract 1 FPS frames, and load panel layout."""
-        self.work_dir = self.work_dir or tempfile.mkdtemp(prefix="mosaic_")
+        if not self.work_dir:
+            # FE_WORK_DIR lets a container put frames on a mounted ephemeral disk
+            # (so extraction doesn't eat instance memory); defaults to /tmp locally.
+            base = os.environ.get("FE_WORK_DIR")
+            if base:
+                os.makedirs(base, exist_ok=True)
+                self.work_dir = tempfile.mkdtemp(prefix="mosaic_", dir=base)
+            else:
+                self.work_dir = tempfile.mkdtemp(prefix="mosaic_")
         os.makedirs(self.work_dir, exist_ok=True)
 
         local = self._localise(self.mosaic_ref, os.path.join(self.work_dir, "mosaic.mp4"))
@@ -92,7 +113,11 @@ class MosaicSource:
 
     @staticmethod
     def _localise(ref: str, dest: str) -> str:
+        """Bring a gs:// object local via the Storage client (no gcloud CLI, so it
+        runs identically in Cloud Shell and a Cloud Run container). Local paths
+        pass through unchanged."""
         if ref.startswith("gs://"):
-            subprocess.run(["gcloud", "storage", "cp", ref, dest], check=True)
+            bucket, _, blob = ref[len("gs://"):].partition("/")
+            _gcs_client().bucket(bucket).blob(blob).download_to_filename(dest)
             return dest
         return ref
