@@ -18,7 +18,6 @@ import argparse
 import asyncio
 import logging
 import os
-import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -259,18 +258,10 @@ def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
     if verify:
         try:
             from observers.video.verifier import VideoVerifier
-            svc.verifier = VideoVerifier()                  # sweeps all groups on a stop
+            svc.verifier = VideoVerifier()                  # reads gs:// slices on demand
             hb_video = Heartbeat("video", project=project)
-            hb_video.set("warming", "0/%d" % len(svc.verifier.groups)); hb_video.start()
-
-            def _warm(hb=hb_video, v=svc.verifier):
-                try:
-                    v.warmup(on_progress=lambda i, n: hb.set("warming", f"{i}/{n}"))
-                    hb.set("ready")
-                except Exception as e:                      # noqa: BLE001
-                    logger.warning("verifier warm-up failed (%s)", e); hb.set("offline")
-            threading.Thread(target=_warm, daemon=True, name="verifier-warmup").start()
-            logger.info("video verifier armed (%d groups; warming mosaics in background)",
+            hb_video.set("online"); hb_video.start()        # no warm-up — ready immediately
+            logger.info("video verifier armed (%d groups; gs:// slices, no warm-up)",
                         len(svc.verifier.groups))
         except Exception as e:
             logger.warning("video verifier unavailable (%s) — telemetry-only", e)
