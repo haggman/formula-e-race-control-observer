@@ -75,11 +75,14 @@ def correlate(
     window_s: float = CORRELATION_WINDOW_S,
     race_id: str = "berlin_2024_r10",
 ) -> list[CorrelatedIncident]:
-    """Group Observations into CorrelatedIncidents by time proximity.
+    """Group Observations into CorrelatedIncidents.
 
-    Observations within `window_s` of a growing cluster's span join it. Cars and
-    locations merge; an incident is `corroborated` when it carries >1 modality.
-    Returns incidents in time order.
+    Time proximity is NECESSARY but not sufficient: an observation only joins an
+    incident it actually belongs to (see `_bonds`). That keeps a lone yaw on one
+    car from being swallowed by a different car's stop that merely happens nearby
+    in time, while still fusing same-car reports, genuine multi-car pileups, and a
+    video read that corroborates a telemetry stop. An incident is `corroborated`
+    when it carries >1 modality. Returns incidents in first-seen time order.
     """
     if not observations:
         return []
@@ -87,16 +90,42 @@ def correlate(
     obs = sorted(observations, key=lambda o: o.ts_utc)
     ids = (f"{race_id}_inc{n:02d}" for n in count(1))
 
-    clusters: list[list[Observation]] = [[obs[0]]]
-    for o in obs[1:]:
-        last = clusters[-1]
-        # join if within the window of the cluster's most recent observation
-        if (o.ts_utc - last[-1].ts_utc) <= timedelta(seconds=window_s):
-            last.append(o)
-        else:
+    clusters: list[list[Observation]] = []
+    for o in obs:
+        target = None
+        for cl in reversed(clusters):                       # prefer the most recent match
+            if (o.ts_utc - cl[-1].ts_utc) > timedelta(seconds=window_s):
+                continue                                    # that incident has gone quiet
+            if _bonds(o, cl):
+                target = cl
+                break
+        if target is None:
             clusters.append([o])
+        else:
+            target.append(o)
 
     return [_assemble(c, next(ids)) for c in clusters]
+
+
+def _bonds(o: Observation, cluster: list[Observation]) -> bool:
+    """Does observation `o` belong to the same real incident as `cluster`?
+
+    - SAME CAR → yes: every report about one car is that car's thread.
+    - both are STOP-class → yes: co-temporal stops are one track blockage (a
+      genuine multi-car pileup, e.g. Fenestraz + Nato).
+    - a VIDEO read next to an existing stop → yes: cross-modal corroboration.
+    Otherwise no — notably, a lone yaw/decel on a NEW car does NOT join another
+    car's stop just because it fell inside the time window.
+    """
+    cars = {x.car_number for x in cluster if x.car_number is not None}
+    if o.car_number is not None and o.car_number in cars:
+        return True
+    cluster_has_stop = any(x.signal in _STOPPED_SIGNALS for x in cluster)
+    if o.signal in _STOPPED_SIGNALS and cluster_has_stop:
+        return True
+    if o.modality == Modality.VIDEO and cluster_has_stop:
+        return True
+    return False
 
 
 def _assemble(cluster: list[Observation], incident_id: str) -> CorrelatedIncident:

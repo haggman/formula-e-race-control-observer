@@ -94,13 +94,14 @@ doesn't require touching the rest of the stack.
   window, re-slice a later window to confirm the blockage is *still* there before
   holding the Safety Car. (We removed this from the core because telemetry-recovery
   covers "did it clear" deterministically — but it's a great model-reasoning task.)
-- **Advanced — car/location-aware correlation** — the correlator currently clusters
-  observations by TIME only (a wide 120s window), so a lone yaw on one car can be
-  swept into a different car's stop that happens nearby in time. The quick fix in
-  the reference build headlines only the stopped car(s); the *fuller* fix is to
-  correlate on car identity + track location so genuinely-separate incidents stay
-  separate (and a real multi-car collision still fuses into one). Meaty, well-defined
-  correlation problem — ideal top-tier bonus.
+- **Advanced — location-aware correlation** — the reference build now bonds
+  observations on CAR IDENTITY (plus stop-class and video corroboration), not time
+  alone, so a lone yaw on one car no longer merges into a different car's stop while
+  a genuine multi-car pileup still fuses (`fusion._bonds`). The remaining *fuller*
+  fix is TRACK-LOCATION proximity: today two unrelated stops that happen within the
+  120s window would still fuse (doesn't occur in the Berlin data, but it's the honest
+  gap). Adding GPS/turn proximity so only co-located stops merge is a meaty,
+  well-defined correlation problem — ideal top-tier bonus.
 
 ---
 
