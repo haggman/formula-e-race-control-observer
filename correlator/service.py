@@ -50,10 +50,6 @@ GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)
 # peeking ahead. Matches the verifier's ~50s tail plus a small margin.
 VERIFY_TAIL_S = 55.0
 
-# Telemetry signals worth a video check (a stop, or a flag-worthy near-miss).
-_VERIFY_TRIGGERS = {SignalType.STOPPED_CAR, SignalType.PROLONGED_STOP,
-                    SignalType.HARD_DECEL, SignalType.YAW_SPIKE}
-
 # Flag severity ordering — used to decide what counts as an ESCALATION.
 _FLAG_RANK = {
     FlagType.NONE: 0, FlagType.YELLOW: 1, FlagType.DOUBLE_YELLOW: 2,
@@ -113,17 +109,18 @@ class CorrelatorService:
         return s.race_time_s if s.reachable else None
 
     def _stop_time(self, inc: CorrelatedIncident) -> float | None:
-        """Race-second to verify. Prefer the actual STOP (that's the blockage to
-        confirm); only fall back to a hint (yaw/decel) if the incident has no stop.
-        Otherwise a merged incident (e.g. a nearby yaw spike + a real stop) would
-        verify the transient's moment and contradict the recommendation."""
-        tele = [o for o in inc.observations if o.modality == Modality.TELEMETRY]
-        stops = [o for o in tele
-                 if o.signal in (SignalType.STOPPED_CAR, SignalType.PROLONGED_STOP)]
-        src = stops or [o for o in tele if o.signal in _VERIFY_TRIGGERS]
-        if not src:
+        """Race-second to verify, or None if this incident doesn't warrant a CCTV
+        check. Only a real STOP is worth Gemini's time — that's the persistent
+        blockage video can confirm. A note-only yaw/decel (a car that twitched and
+        drove on) must NOT be verified: it self-resolves in telemetry, and asking
+        the model to 'confirm' a transient invites a stale/over-read of the spin
+        that then contradicts the recommendation."""
+        stops = [o for o in inc.observations
+                 if o.modality == Modality.TELEMETRY
+                 and o.signal in (SignalType.STOPPED_CAR, SignalType.PROLONGED_STOP)]
+        if not stops:
             return None
-        return (min(o.ts_utc for o in src) - GREEN_FLAG).total_seconds()
+        return (min(o.ts_utc for o in stops) - GREEN_FLAG).total_seconds()
 
     def _maybe_verify(self, inc: CorrelatedIncident, key: tuple) -> None:
         """Attach a ready verdict; otherwise trigger the CCTV check once the
