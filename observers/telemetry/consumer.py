@@ -121,7 +121,7 @@ class TelemetryObserver:
                 if (held <= STILL_STOPPED_MAX_S
                         and now - self._last_still.get(car, 0.0) >= STILL_STOPPED_EVERY_S):
                     self._last_still[car] = now
-                    out.append(_prolonged_stop_obs(s, held))
+                    out.append(_still_stranded_obs(s, held))
 
             # A previously-stopped car back at genuine RACING speed has recovered —
             # release the latch and emit RECOVERED so the blockage clears. A RETIRED
@@ -184,6 +184,22 @@ def _prolonged_stop_obs(s: TelemetrySample, held_s: float) -> Observation:
         location=TrackLocation(gps_lat=s.lat, gps_lng=s.lng),
         summary=f"car {s.car_number} STILL stopped after {held_s:.0f}s — confirmed blockage",
         evidence={"held_s": round(held_s, 1)},
+    )
+
+
+def _still_stranded_obs(s: TelemetrySample, held_s: float) -> Observation:
+    """Recurring 'incident still ongoing' heartbeat while a confirmed stop persists.
+    Softer wording than the initial escalation: a retired car may be under tow
+    (moving) during recovery, so we say 'still stranded / incident ongoing' rather
+    than asserting it is motionless. Same signal, so it keeps the Safety Car held."""
+    from shared.models import Modality, SignalType, TrackLocation
+    return Observation(
+        modality=Modality.TELEMETRY, signal=SignalType.PROLONGED_STOP,
+        ts_utc=s.ts_utc, car_number=s.car_number,
+        confidence=detector.PROLONGED_CONF, severity_hint=detector.SEV_PROLONGED,
+        location=TrackLocation(gps_lat=s.lat, gps_lng=s.lng),
+        summary=f"car {s.car_number} still stranded — incident ongoing ({held_s:.0f}s)",
+        evidence={"held_s": round(held_s, 1), "heartbeat": True},
     )
 
 

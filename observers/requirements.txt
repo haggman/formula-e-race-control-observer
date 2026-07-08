@@ -1,0 +1,6 @@
+# Telemetry Observer (worker pool) — deterministic, no Gemini.
+# Pulls fe-telemetry, publishes Observations to fe-observations, writes a
+# heartbeat to Firestore agent_status/. Deliberately lean (no genai/storage).
+pydantic>=2.5,<3
+google-cloud-pubsub>=2.25
+google-cloud-firestore>=2.19
