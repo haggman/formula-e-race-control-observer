@@ -60,7 +60,9 @@ _STOPPED_SIGNALS = {
 # "Soft" telemetry hints — a car twitched (spin/snap or heavy braking) but did
 # NOT stop. On their own, below the serious-severity line, these are note-only:
 # a yaw spike that self-recovers isn't a flag, or we'd cry wolf every lap.
+# RECOVERED joins them for the note test: a yaw that later SETTLES is still benign.
 _SOFT_HINTS = {SignalType.YAW_SPIKE, SignalType.HARD_DECEL}
+_BENIGN_SIGNALS = _SOFT_HINTS | {SignalType.RECOVERED}
 
 
 # ============================================================================
@@ -102,16 +104,12 @@ def _assemble(cluster: list[Observation], incident_id: str) -> CorrelatedInciden
     modalities = {o.modality for o in cluster}
     corroborated = len(modalities) > 1
 
-    # Headline the car(s) that ARE the incident — the stopped/obstructing ones.
-    # A car that merely twitched nearby (a lone yaw/decel that never stopped) can
-    # fall inside the same time window but isn't the blockage, so it shouldn't be
-    # flagged alongside the stopped car. Only if nothing stopped do we list all.
-    stopped_cars = [
-        o.car_number for o in cluster
-        if o.signal in _STOPPED_SIGNALS and o.car_number is not None
-    ]
-    src = stopped_cars or [o.car_number for o in cluster if o.car_number is not None]
-    cars = list(dict.fromkeys(src))     # dedupe, preserve first-seen order
+    # List every car the incident touches, so the console can chip them all (the
+    # stopped car AND, say, a car that yawed alongside it — both are named in the
+    # narrative). The FLAG itself is driven by stopped cars only (see recommend_flag),
+    # so listing a yaw car here identifies it without escalating on its behalf.
+    cars = list(dict.fromkeys(
+        o.car_number for o in cluster if o.car_number is not None))
 
     severity = _severity(cluster, corroborated)
 
@@ -193,11 +191,16 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     stopped_cars = {o.car_number for o in stopped if o.car_number is not None}
     prolonged = any(o.signal == SignalType.PROLONGED_STOP for o in incident.observations)
 
-    # --- Telemetry says the car is racing again → definitively cleared -----
+    # --- Telemetry says the STOPPED car is racing again → definitively cleared --
     # The car's own speed is the strongest possible evidence the blockage is gone,
-    # so this even overrides a PROLONGED_STOP or a video "blocked" read.
-    if any(o.signal == SignalType.RECOVERED for o in incident.observations):
-        who = ", ".join(f"#{c}" for c in sorted(stopped_cars)) or "the car"
+    # so this even overrides a PROLONGED_STOP or a video "blocked" read. But it must
+    # be the stopped car itself recovering: a different car that merely settled a
+    # yaw alongside the incident must NOT veto a genuine stop. (If nothing stopped,
+    # there's no flag to clear — fall through to the note-level handling below.)
+    recovered_cars = {o.car_number for o in incident.observations
+                      if o.signal == SignalType.RECOVERED and o.car_number is not None}
+    if stopped_cars and stopped_cars <= recovered_cars:
+        who = ", ".join(f"#{c}" for c in sorted(stopped_cars))
         return FlagRecommendation(
             flag=FlagType.NONE, turns=turns,
             rationale=f"Telemetry: {who} is racing again — recovered, no flag.")
@@ -233,7 +236,7 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     # A lone telemetry blip (yaw/decel) that never became a stop and isn't
     # serious → note-only. Keeps a car that twitched and drove on from being
     # flagged (and, once headlined out of a stop cluster, from raising a card).
-    if incident.severity < 60 and all(o.signal in _SOFT_HINTS for o in incident.observations):
+    if incident.severity < 60 and all(o.signal in _BENIGN_SIGNALS for o in incident.observations):
         return FlagRecommendation(
             flag=FlagType.NONE, turns=turns,
             rationale="Transient telemetry blip (no stop) — note and keep watching.")

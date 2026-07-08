@@ -42,9 +42,13 @@ logger = logging.getLogger("telemetry.observer")
 
 WINDOW_S = 8.0            # rolling per-car window the detector scores
 DEBOUNCE_S = 10.0        # suppress repeats of the same (car, signal)
-RECOVER_SPEED_KMH = 50.0 # a previously-stopped car above this is RACING again (not a slow tow)
+RECOVER_SPEED_KMH = 150.0 # a previously-stopped car above this is genuinely RACING again.
+                          # Deliberately high: a retired car under tow bounces to 50-115 km/h
+                          # (recovery truck) — that is NOT racing, so tow speed must not qualify.
 STILL_STOPPED_EVERY_S = 30.0  # heartbeat cadence while a confirmed stop persists
 STILL_STOPPED_MAX_S = 180.0   # stop pinging after this — the car is clearly retired, not news
+YAW_SETTLE_SPEED_KMH = 120.0  # a yaw/decel-disturbed car back above this is racing cleanly again
+YAW_SETTLE_HOLD_S = 6.0       # …once it has held that for this long since the last disturbance
 JUMP_GAP_S = 5.0         # a race-time step bigger than this (or backward) = a
                          # /jump or /restart → drop stale per-car state
 
@@ -61,6 +65,8 @@ class TelemetryObserver:
         self._stop_since: dict[int, float] = {}       # car -> stop start epoch
         self._escalated: dict[int, bool] = {}         # car -> PROLONGED_STOP emitted
         self._last_still: dict[int, float] = {}       # car -> last "still stopped" heartbeat epoch
+        self._disturbed: dict[int, float] = {}        # car -> epoch of last yaw/decel disturbance
+                                                      # (open "is it OK now?" watch until it settles)
         self._last_frame_ts: float | None = None      # for jump/restart detection
 
     def process_frame(self, frame: RaceFrame) -> list[Observation]:
@@ -74,6 +80,7 @@ class TelemetryObserver:
                 now < self._last_frame_ts - 2 or now > self._last_frame_ts + JUMP_GAP_S):
             self._buf.clear(); self._stopped.clear(); self._stop_since.clear()
             self._escalated.clear(); self._last_fired.clear(); self._last_still.clear()
+            self._disturbed.clear()
         self._last_frame_ts = now
         for s in frame.to_samples():
             car = s.car_number
@@ -87,6 +94,9 @@ class TelemetryObserver:
                 if obs.signal == SignalType.STOPPED_CAR:
                     self._stopped[car] = True
                     self._stop_since.setdefault(car, obs.ts_utc.timestamp())
+                    self._disturbed.pop(car, None)          # a stop supersedes a yaw watch
+                elif obs.signal in (SignalType.YAW_SPIKE, SignalType.HARD_DECEL):
+                    self._disturbed[car] = now              # open/refresh the "is it OK now?" watch
                 key = (car, obs.signal.value)
                 if now - self._last_fired.get(key, -1e9) < self.debounce_s:
                     continue                       # caller-owned debounce
@@ -113,15 +123,29 @@ class TelemetryObserver:
                     self._last_still[car] = now
                     out.append(_prolonged_stop_obs(s, held))
 
-            # A previously-stopped car back at RACING speed (not a slow tow) has
-            # recovered — release the latch and emit RECOVERED so the blockage clears.
-            if buf and buf[-1].speed_kmh >= RECOVER_SPEED_KMH:
+            # A previously-stopped car back at genuine RACING speed has recovered —
+            # release the latch and emit RECOVERED so the blockage clears. A RETIRED
+            # car never qualifies: its later movement is the recovery truck (tow
+            # speed), not the car racing, so the Safety Car must hold.
+            latest = buf[-1] if buf else None
+            if latest and latest.speed_kmh >= RECOVER_SPEED_KMH and not latest.is_retired:
                 if self._stopped.get(car, False):
-                    out.append(_recovered_obs(buf[-1]))
+                    out.append(_recovered_obs(latest))
                 self._stopped[car] = False
                 self._stop_since.pop(car, None)
                 self._escalated[car] = False
                 self._last_still.pop(car, None)
+                self._disturbed.pop(car, None)
+
+            # Follow-up on a yaw/decel disturbance (no stop): once the car is back
+            # at clean racing speed and has held it, close the loop with a "settled —
+            # racing again" so a car we flagged isn't left hanging with no resolution.
+            elif (car in self._disturbed and not self._stopped.get(car)
+                  and latest and not latest.is_retired
+                  and latest.speed_kmh >= YAW_SETTLE_SPEED_KMH
+                  and now - self._disturbed[car] >= YAW_SETTLE_HOLD_S):
+                out.append(_settled_obs(latest))
+                self._disturbed.pop(car, None)
         return out
 
 
@@ -134,6 +158,19 @@ def _recovered_obs(s: TelemetrySample) -> Observation:
         location=TrackLocation(gps_lat=s.lat, gps_lng=s.lng),
         summary=f"car {s.car_number} moving again at {s.speed_kmh:.0f} km/h — recovered, racing",
         evidence={"speed_kmh": round(s.speed_kmh, 1)},
+    )
+
+
+def _settled_obs(s: TelemetrySample) -> Observation:
+    """Build the RECOVERED Observation for a yaw/decel-disturbed car that never
+    stopped and is now back at clean racing speed — the 'it's fine now' follow-up."""
+    from shared.models import Modality, SignalType, TrackLocation
+    return Observation(
+        modality=Modality.TELEMETRY, signal=SignalType.RECOVERED,
+        ts_utc=s.ts_utc, car_number=s.car_number, confidence=0.9, severity_hint=0,
+        location=TrackLocation(gps_lat=s.lat, gps_lng=s.lng),
+        summary=f"car {s.car_number} settled — back up to racing speed ({s.speed_kmh:.0f} km/h)",
+        evidence={"speed_kmh": round(s.speed_kmh, 1), "after": "disturbance"},
     )
 
 

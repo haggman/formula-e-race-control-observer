@@ -45,6 +45,7 @@ class TelemetrySample(BaseModel):
     lng: float
     heading: float
     driver_name: Optional[str] = None
+    is_retired: bool = False   # car is out of the race — any later movement is a tow, not racing
 
 
 # ----------------------------------------------------------------------------
@@ -96,7 +97,7 @@ class RaceFrame(BaseModel):
                 speed_kmh=c.speed_kmh, accel_x=c.accel_x, accel_y=c.accel_y,
                 yaw_rate=c.yaw_rate, brake_pct=c.brake_pct,
                 lat=c.lat, lng=c.lng, heading=c.heading,
-                driver_name=c.driver_name,
+                driver_name=c.driver_name, is_retired=c.is_retired,
             )
             for c in self.cars
         ]
