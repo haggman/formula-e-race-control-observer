@@ -168,16 +168,20 @@ class CorrelatorService:
         label = {"blocked": "CONFIRMED — track blocked",
                  "cleared": "CLEARED — car recovered, line clear",
                  "unseen": "no CCTV view of this stop"}.get(verdict.state, verdict.state)
+        # chip what the VIDEO actually saw (the car it identified); only if it
+        # couldn't read a number do we fall back to the telemetry-flagged car(s).
+        seen = getattr(verdict, "identified", None)
+        video_cars = [seen] if seen else list(cars or [])
         try:
             self._obs_pub.publish(Observation(
                 modality=Modality.VIDEO, signal=SignalType.STATIONARY_CAR_VISUAL,
                 ts_utc=GREEN_FLAG + timedelta(seconds=stop_time),
                 confidence=float(verdict.confidence or 0.5),
                 severity_hint=(85 if verdict.state == "blocked" else 10),
-                car_number=(cars[0] if cars else None),
+                car_number=(video_cars[0] if video_cars else None),
                 location=TrackLocation(camera_id=cam),
                 summary=f"[{label}] {verdict.description}",
-                evidence={"verifier": True, "verdict": verdict.state, "cars": list(cars or [])}))
+                evidence={"verifier": True, "verdict": verdict.state, "cars": video_cars}))
         except Exception as e:
             logger.warning("verification publish skipped (%s)", e)
 
@@ -200,12 +204,15 @@ class CorrelatorService:
                 kind = "CLEARED"                            # flag dropped to none: video cleared OR car recovered
             elif rank > prev[0]:
                 kind = "ESCALATION"
-            elif verdict == "blocked" and prev[1] != "blocked":
-                kind = "CONFIRMED"
-            elif inc.corroborated and not prev[2]:
+            elif rank > 0 and verdict == "blocked" and prev[1] != "blocked":
+                kind = "CONFIRMED"                          # only meaningful while a flag is active
+            elif rank > 0 and inc.corroborated and not prev[2]:
                 kind = "CONFIRMED"
             else:
-                continue                                    # nothing new to say
+                continue                                    # nothing new to say (terminal once cleared)
+
+            if kind == "NEW" and rank == 0:
+                continue                                    # a brand-new no-flag note isn't worth a card
             stored_v = "cleared" if kind == "CLEARED" else (verdict or (prev[1] if prev else None))
             self._announced[key] = (max(rank, prev[0] if prev else 0), stored_v,
                                     inc.corroborated or (prev[2] if prev else False))

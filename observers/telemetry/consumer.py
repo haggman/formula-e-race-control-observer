@@ -43,6 +43,8 @@ logger = logging.getLogger("telemetry.observer")
 WINDOW_S = 8.0            # rolling per-car window the detector scores
 DEBOUNCE_S = 10.0        # suppress repeats of the same (car, signal)
 RECOVER_SPEED_KMH = 50.0 # a previously-stopped car above this is RACING again (not a slow tow)
+STILL_STOPPED_EVERY_S = 30.0  # heartbeat cadence while a confirmed stop persists
+STILL_STOPPED_MAX_S = 180.0   # stop pinging after this — the car is clearly retired, not news
 JUMP_GAP_S = 5.0         # a race-time step bigger than this (or backward) = a
                          # /jump or /restart → drop stale per-car state
 
@@ -58,6 +60,7 @@ class TelemetryObserver:
         self._last_fired: dict[tuple[int, str], float] = {}
         self._stop_since: dict[int, float] = {}       # car -> stop start epoch
         self._escalated: dict[int, bool] = {}         # car -> PROLONGED_STOP emitted
+        self._last_still: dict[int, float] = {}       # car -> last "still stopped" heartbeat epoch
         self._last_frame_ts: float | None = None      # for jump/restart detection
 
     def process_frame(self, frame: RaceFrame) -> list[Observation]:
@@ -70,7 +73,7 @@ class TelemetryObserver:
         if self._last_frame_ts is not None and (
                 now < self._last_frame_ts - 2 or now > self._last_frame_ts + JUMP_GAP_S):
             self._buf.clear(); self._stopped.clear(); self._stop_since.clear()
-            self._escalated.clear(); self._last_fired.clear()
+            self._escalated.clear(); self._last_fired.clear(); self._last_still.clear()
         self._last_frame_ts = now
         for s in frame.to_samples():
             car = s.car_number
@@ -97,7 +100,18 @@ class TelemetryObserver:
                     and car in self._stop_since
                     and now - self._stop_since[car] >= detector.STOP_ESCALATE_S):
                 self._escalated[car] = True
+                self._last_still[car] = now
                 out.append(_prolonged_stop_obs(s, now - self._stop_since[car]))
+
+            # Sparse "still stopped" heartbeat while the confirmed stop persists —
+            # reassurance the blockage is still there, at a calm cadence and capped
+            # so a retired car doesn't ping the feed forever.
+            elif (self._escalated.get(car) and car in self._stop_since):
+                held = now - self._stop_since[car]
+                if (held <= STILL_STOPPED_MAX_S
+                        and now - self._last_still.get(car, 0.0) >= STILL_STOPPED_EVERY_S):
+                    self._last_still[car] = now
+                    out.append(_prolonged_stop_obs(s, held))
 
             # A previously-stopped car back at RACING speed (not a slow tow) has
             # recovered — release the latch and emit RECOVERED so the blockage clears.
@@ -107,6 +121,7 @@ class TelemetryObserver:
                 self._stopped[car] = False
                 self._stop_since.pop(car, None)
                 self._escalated[car] = False
+                self._last_still.pop(car, None)
         return out
 
 

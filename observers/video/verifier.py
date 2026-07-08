@@ -83,6 +83,7 @@ class VideoVerdict:
     description: str = ""
     confidence: float = 0.0
     per_group: dict = field(default_factory=dict)      # raw per-group replies
+    identified: Optional[int] = None                   # car number the model actually read (else None)
 
     @property
     def blocked(self) -> bool:
@@ -223,6 +224,13 @@ class VideoVerifier:
         return per_group
 
     @staticmethod
+    def _seen_car(r: dict):
+        try:
+            return int(str(r.get("seen_car")).lstrip("#"))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _aggregate(per_group: dict) -> VideoVerdict:
         blocked = [r for r in per_group.values() if r.get("blockage")]
         cleared = [r for r in per_group.values() if r.get("cleared")]
@@ -232,13 +240,15 @@ class VideoVerifier:
             return VideoVerdict(state="blocked", cameras=cams,
                                 description=str(best.get("what_you_see", "")),
                                 confidence=float(best.get("confidence", 0) or 0),
-                                per_group=per_group)
+                                per_group=per_group,
+                                identified=VideoVerifier._seen_car(best))
         if cleared:
             best = max(cleared, key=lambda r: r.get("confidence", 0) or 0)
             return VideoVerdict(state="cleared",
                                 description=str(best.get("what_you_see", "")),
                                 confidence=float(best.get("confidence", 0) or 0),
-                                per_group=per_group)
+                                per_group=per_group,
+                                identified=VideoVerifier._seen_car(best))
         return VideoVerdict(state="unseen", per_group=per_group)
 
     async def verify(self, race_time_s: int, *, cars=None,

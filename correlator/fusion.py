@@ -57,6 +57,11 @@ _STOPPED_SIGNALS = {
     SignalType.STATIONARY_CAR_VISUAL,
 }
 
+# "Soft" telemetry hints — a car twitched (spin/snap or heavy braking) but did
+# NOT stop. On their own, below the serious-severity line, these are note-only:
+# a yaw spike that self-recovers isn't a flag, or we'd cry wolf every lap.
+_SOFT_HINTS = {SignalType.YAW_SPIKE, SignalType.HARD_DECEL}
+
 
 # ============================================================================
 # Fusion
@@ -97,10 +102,16 @@ def _assemble(cluster: list[Observation], incident_id: str) -> CorrelatedInciden
     modalities = {o.modality for o in cluster}
     corroborated = len(modalities) > 1
 
-    cars: list[int] = []
-    for o in cluster:
-        if o.car_number is not None and o.car_number not in cars:
-            cars.append(o.car_number)
+    # Headline the car(s) that ARE the incident — the stopped/obstructing ones.
+    # A car that merely twitched nearby (a lone yaw/decel that never stopped) can
+    # fall inside the same time window but isn't the blockage, so it shouldn't be
+    # flagged alongside the stopped car. Only if nothing stopped do we list all.
+    stopped_cars = [
+        o.car_number for o in cluster
+        if o.signal in _STOPPED_SIGNALS and o.car_number is not None
+    ]
+    src = stopped_cars or [o.car_number for o in cluster if o.car_number is not None]
+    cars = list(dict.fromkeys(src))     # dedupe, preserve first-seen order
 
     severity = _severity(cluster, corroborated)
 
@@ -219,6 +230,14 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
                        f"{', '.join('#'+str(c) for c in sorted(stopped_cars))}); "
                        "marshals out, pending video confirmation before Safety Car."),
         )
+    # A lone telemetry blip (yaw/decel) that never became a stop and isn't
+    # serious → note-only. Keeps a car that twitched and drove on from being
+    # flagged (and, once headlined out of a stop cluster, from raising a card).
+    if incident.severity < 60 and all(o.signal in _SOFT_HINTS for o in incident.observations):
+        return FlagRecommendation(
+            flag=FlagType.NONE, turns=turns,
+            rationale="Transient telemetry blip (no stop) — note and keep watching.")
+
     if incident.severity >= 60 or _has(incident, SignalType.DEBRIS):
         return FlagRecommendation(
             flag=FlagType.DOUBLE_YELLOW, turns=turns,

@@ -77,6 +77,31 @@ the recommendation. That's where the judgment lives.
 - Possible advanced tier: swap the telemetry trigger for a Vertex AI Vision
   stream as the "always-watching" detector (see Open Questions).
 
+### Bonus / add-on tasks (banked as we build the solution)
+
+These are self-contained extensions that already exist in the reference build, so
+they make natural "finished early?" tiers. Each is a clean, well-scoped ask that
+doesn't require touching the rest of the stack.
+
+- **Car chips in the console** — render each car number as a team-liveried colored
+  circle shared across all three columns (front-end only; a nice, low-risk warm-up).
+- **Telemetry "recovered" signal** — emit a `RECOVERED` observation when a
+  previously-stopped car is back at racing speed, and have fusion veto the flag to
+  NONE. Teaches "the car's own speed is the strongest clear signal."
+- **Livery map as a Gemini hint** — feed the verifier a car#→livery table so it
+  identifies the stopped car by team colors (with a "don't invent a number" guard).
+- **Advanced — video persistence / auto-extend** — instead of trusting the first
+  window, re-slice a later window to confirm the blockage is *still* there before
+  holding the Safety Car. (We removed this from the core because telemetry-recovery
+  covers "did it clear" deterministically — but it's a great model-reasoning task.)
+- **Advanced — car/location-aware correlation** — the correlator currently clusters
+  observations by TIME only (a wide 120s window), so a lone yaw on one car can be
+  swept into a different car's stop that happens nearby in time. The quick fix in
+  the reference build headlines only the stopped car(s); the *fuller* fix is to
+  correlate on car identity + track location so genuinely-separate incidents stay
+  separate (and a real multi-car collision still fuses into one). Meaty, well-defined
+  correlation problem — ideal top-tier bonus.
+
 ---
 
 ## Tooling decisions
