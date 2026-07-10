@@ -21,6 +21,8 @@ REGION="${REGION:-us-central1}"
 REPO_NAME="${REPO_NAME:-fe-services}"
 RACE_ID="${RACE_ID:-berlin_2024_r10}"
 SIMULATOR_SERVICE="${SIMULATOR_SERVICE:-fe-simulator}"
+OBSERVATIONS_TOPIC="${OBSERVATIONS_TOPIC:-fe-observations}"
+INCIDENTS_TOPIC="${INCIDENTS_TOPIC:-fe-incidents}"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 [[ -n "$PROJECT_ID" ]] || { echo "ERROR: PROJECT_ID required (source activate.sh)" >&2; exit 1; }
@@ -64,6 +66,12 @@ for role in roles/pubsub.editor roles/datastore.user; do
     done
     [[ "$granted" == "1" ]] || { echo "ERROR: failed to grant $role" >&2; exit 1; }
     echo "    granted $role"
+done
+
+echo ">>> Ensuring Pub/Sub topics (console self-creates + seeks its own subscriptions)..."
+for topic in "$OBSERVATIONS_TOPIC" "$INCIDENTS_TOPIC"; do
+    gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1 \
+        || gcloud pubsub topics create "$topic" --project="$PROJECT_ID"
 done
 
 echo ">>> Building image with Cloud Build..."

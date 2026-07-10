@@ -84,6 +84,7 @@ class VideoVerdict:
     confidence: float = 0.0
     per_group: dict = field(default_factory=dict)      # raw per-group replies
     identified: Optional[int] = None                   # car number the model actually read (else None)
+    error: Optional[str] = None                        # set when the check couldn't RUN (vs. ran and saw nothing)
 
     @property
     def blocked(self) -> bool:
@@ -136,6 +137,19 @@ def _parse(text: str) -> dict:
         except json.JSONDecodeError:
             pass
     return {}
+
+
+def _short_error(exc: Exception) -> str:
+    """A one-line, human-friendly reason a group verify failed."""
+    s = str(exc)
+    up = s.upper()
+    if "BEING PROVISIONED" in up or "TRY AGAIN" in up:
+        return "Vertex AI service agent still provisioning — will retry"
+    if "PERMISSION" in up or "403" in up or "FORBIDDEN" in up:
+        return "permission denied reading the mosaics (check the Vertex service agent's storage access)"
+    if "NOT FOUND" in up or "404" in up or "NO SUCH" in up:
+        return "mosaic file not found (is the bucket staged?)"
+    return (s[:140] + "…") if len(s) > 141 else s
 
 
 # ---------------------------------------------------------------------------
@@ -210,18 +224,21 @@ class VideoVerifier:
         return d
 
     # -- sweep + aggregate ---------------------------------------------------
-    async def _sweep(self, t: int, lead: int, tail: int, cars) -> dict:
-        """One concurrent all-groups sweep at race-second t; return per-group replies."""
+    async def _sweep(self, t: int, lead: int, tail: int, cars):
+        """One concurrent all-groups sweep at race-second t.
+        Returns (per_group_replies, errors) — errors let the caller tell a real
+        'saw nothing' from a check that never RAN (auth/provisioning/network)."""
         results = await asyncio.gather(
             *[self._verify_group(g, t, lead, tail, cars) for g in self.groups],
             return_exceptions=True)
-        per_group = {}
+        per_group, errors = {}, []
         for r in results:
             if isinstance(r, Exception):
                 logger.warning("group verify failed: %s", r)
+                errors.append(_short_error(r))
                 continue
             per_group[r["group"]] = r
-        return per_group
+        return per_group, errors
 
     @staticmethod
     def _seen_car(r: dict):
@@ -231,7 +248,7 @@ class VideoVerifier:
             return None
 
     @staticmethod
-    def _aggregate(per_group: dict) -> VideoVerdict:
+    def _aggregate(per_group: dict, errors: list | None = None) -> VideoVerdict:
         blocked = [r for r in per_group.values() if r.get("blockage")]
         cleared = [r for r in per_group.values() if r.get("cleared")]
         if blocked:
@@ -249,6 +266,11 @@ class VideoVerifier:
                                 confidence=float(best.get("confidence", 0) or 0),
                                 per_group=per_group,
                                 identified=VideoVerifier._seen_car(best))
+        # Nothing blocked/cleared. If NO group even ran (all errored), that's an
+        # outage, not a clean "no view" — surface it so the console can say so.
+        if not per_group and errors:
+            return VideoVerdict(state="error", per_group=per_group,
+                                description=errors[0], error=errors[0])
         return VideoVerdict(state="unseen", per_group=per_group)
 
     async def verify(self, race_time_s: int, *, cars=None,
@@ -261,7 +283,8 @@ class VideoVerifier:
         deterministic), not by re-querying video."""
         self._ensure_client()
         t = int(race_time_s)
-        return self._aggregate(await self._sweep(t, lead, tail, cars))
+        per_group, errors = await self._sweep(t, lead, tail, cars)
+        return self._aggregate(per_group, errors)
 
 
 def main() -> int:

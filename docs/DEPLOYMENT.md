@@ -129,6 +129,9 @@ That runs, in order:
 3. `deploy/deploy_console.sh` — service `fe-console` (always-on, unauthenticated).
    **Prints the Console URL** at the end.
 
+It finishes with `deploy/verify_app.sh` (a green-light check, below) — the same way
+`setup/all.sh` ends with `setup/verify.sh`.
+
 Each script builds its image with Cloud Build into the shared `fe-services`
 Artifact Registry repo, creates its service account, and grants IAM with
 propagation retries. You can run any one on its own to redeploy just that agent.
@@ -138,14 +141,21 @@ propagation retries. You can run any one on its own to redeploy just that agent.
 > more than plain `subscriber`, so they get `pubsub.editor`. Pragmatic for the
 > hack; tighten later if desired.
 
-**Confirm the agents are healthy:**
+**Confirm the agents are healthy** — the one-command green-light check (also run
+automatically as the last step of `deploy_app.sh`):
+
+```bash
+bash deploy/verify_app.sh
+```
+
+It polls each agent's Firestore heartbeat (`agent_status/telemetry`, `correlator`,
+`video`) and pings the console URL — a fresh heartbeat proves the process is
+actually running and reachable, not merely deployed. Each failing check prints a
+one-line fix. To dig into a specific agent:
 
 ```bash
 gcloud run worker-pools logs read fe-telemetry-observer --region "$REGION" --limit 20
 gcloud run worker-pools logs read fe-correlator          --region "$REGION" --limit 20
-# The console's own health:
-curl -s "$(gcloud run services describe fe-console --region "$REGION" \
-  --format='value(status.url)')/control/status" | head
 ```
 
 You should see the observer "online — pulling", and the correlator "online —
@@ -219,8 +229,9 @@ The cleanest reset is to delete the whole project.
 # From repo root, in Cloud Shell:
 gcloud config set project YOUR_NEW_PROJECT_ID
 source activate.sh
-bash setup/all.sh          # data layer  (~15 min)
+bash setup/all.sh          # data layer  (~15 min), ends with setup/verify.sh
 source activate.sh         # pick up cached SIM_URL
-bash deploy/deploy_app.sh  # application  (~10 min) → prints Console URL
+bash deploy/deploy_app.sh  # application  (~10 min), ends with deploy/verify_app.sh → prints Console URL
+# Re-check any time:  bash setup/verify.sh   /   bash deploy/verify_app.sh
 # Open the Console URL, hit a Jump button, then Resume.
 ```

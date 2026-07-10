@@ -49,6 +49,9 @@ GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)
 # the forward window has actually played — we confirm from what happened, not by
 # peeking ahead. Matches the verifier's ~50s tail plus a small margin.
 VERIFY_TAIL_S = 55.0
+# If the CCTV check can't RUN (e.g. a fresh-project Vertex service agent still
+# provisioning), retry this many times (~a minute each) before giving up.
+VERIFY_MAX_ATTEMPTS = 3
 
 # Flag severity ordering — used to decide what counts as an ESCALATION.
 _FLAG_RANK = {
@@ -140,20 +143,58 @@ class CorrelatorService:
         now = self._race_now()
         if now is not None and now < stop_time + VERIFY_TAIL_S:
             return                                          # window hasn't played yet
-        self._verify[key] = {"triggered": True, "verdict": None, "note": None}
+        prev = self._verify.get(key) or {}
+        if not prev.get("investigating_sent"):              # announce the check ONCE (survives retries)
+            who = f" for car #{inc.car_numbers[0]}" if inc.car_numbers else ""
+            self._publish_video_note(int(stop_time),
+                                     f"[INVESTIGATING] checking CCTV footage{who}…",
+                                     cars=list(inc.car_numbers))
+        self._verify[key] = {"triggered": True, "verdict": None, "note": None,
+                             "investigating_sent": True, "attempts": prev.get("attempts", 0)}
         self._pool.submit(self._run_verify, key, int(stop_time), list(inc.car_numbers))
         logger.info("verifying stop @%ds on CCTV (all groups)…", int(stop_time))
 
     def _run_verify(self, key: tuple, stop_time: int, cars: list) -> None:
         try:
             verdict = asyncio.run(self.verifier.verify(stop_time, cars=cars))
-            self._verify[key].update(verdict=verdict.state, note=verdict.description)
-            logger.info("video verdict @%ds → %s%s", stop_time, verdict.state.upper(),
-                        f" ({', '.join(verdict.cameras)})" if verdict.cameras else "")
-            self._publish_verification(stop_time, verdict, cars)   # → console Video Agent feed
         except Exception as e:
             logger.warning("verification failed @%ds: %s", stop_time, e)
-            self._verify[key]["triggered"] = False          # allow a retry next tick
+            self._verify[key]["triggered"] = False          # transient — retry next tick
+            return
+        # A "couldn't RUN" outage (auth/provisioning) is different from a clean read:
+        # give it a few attempts (~a minute each) so a fresh-project hiccup self-heals
+        # without a re-jump, then surface it honestly rather than as "no CCTV view".
+        if verdict.state == "error":
+            attempts = self._verify[key].get("attempts", 0) + 1
+            self._verify[key]["attempts"] = attempts
+            if attempts < VERIFY_MAX_ATTEMPTS:
+                logger.warning("video check couldn't run @%ds (attempt %d/%d): %s — retrying",
+                               stop_time, attempts, VERIFY_MAX_ATTEMPTS, verdict.error)
+                self._verify[key]["triggered"] = False      # retry (verdict stays None)
+                return
+            logger.warning("video check gave up @%ds after %d attempts: %s",
+                           stop_time, attempts, verdict.error)
+        self._verify[key].update(verdict=verdict.state, note=verdict.description)
+        logger.info("video verdict @%ds → %s%s", stop_time, verdict.state.upper(),
+                    f" ({', '.join(verdict.cameras)})" if verdict.cameras else "")
+        self._publish_verification(stop_time, verdict, cars)   # → console Video Agent feed
+
+    def _publish_video_note(self, stop_time: int, text: str, cars=None) -> None:
+        """Publish a lightweight STATUS line to the Video Agent feed (e.g. the
+        'investigating…' beat when a check starts) — distinct from a verdict, and
+        never a safety signal (evidence.status marks it, low severity)."""
+        if self._obs_pub is None:
+            return
+        try:
+            self._obs_pub.publish(Observation(
+                modality=Modality.VIDEO, signal=SignalType.STATIONARY_CAR_VISUAL,
+                ts_utc=GREEN_FLAG + timedelta(seconds=int(stop_time)),
+                confidence=0.3, severity_hint=5,
+                car_number=(cars[0] if cars else None),
+                summary=text,
+                evidence={"verifier": True, "status": True, "cars": list(cars or [])}))
+        except Exception as e:
+            logger.warning("video note publish skipped (%s)", e)
 
     def _publish_verification(self, stop_time: int, verdict, cars=None) -> None:
         """Emit the verifier's read as a video Observation so the console's Video
@@ -164,7 +205,8 @@ class CorrelatorService:
         cam = verdict.cameras[0] if verdict.cameras else None
         label = {"blocked": "CONFIRMED — track blocked",
                  "cleared": "CLEARED — car recovered, line clear",
-                 "unseen": "no CCTV view of this stop"}.get(verdict.state, verdict.state)
+                 "unseen": "no CCTV view of this stop",
+                 "error": "UNAVAILABLE — video check couldn't run"}.get(verdict.state, verdict.state)
         # chip what the VIDEO actually saw (the car it identified); only if it
         # couldn't read a number do we fall back to the telemetry-flagged car(s).
         seen = getattr(verdict, "identified", None)

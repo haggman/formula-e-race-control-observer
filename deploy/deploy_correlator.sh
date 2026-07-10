@@ -71,6 +71,31 @@ for role in roles/pubsub.editor roles/datastore.user roles/aiplatform.user roles
     echo "    granted $role"
 done
 
+# --- Vertex AI service agent: reads the gs:// mosaics ON GEMINI'S BEHALF -------
+# When Gemini reads a gs:// video, the *Vertex AI service agent* fetches the file
+# (not the correlator SA above), so IT needs mosaics read. On a fresh project this
+# agent must first be provisioned — otherwise the verifier hits
+# "400 FAILED_PRECONDITION: service agents are being provisioned".
+echo ">>> Provisioning the Vertex AI service agent + granting it mosaics read..."
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+gcloud beta services identity create --service=aiplatform.googleapis.com \
+    --project="$PROJECT_ID" >/dev/null 2>&1 || true
+AIPLATFORM_AGENT="service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com"
+granted=0
+for attempt in 1 2 3 4 5 6; do
+    if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+        --member="serviceAccount:${AIPLATFORM_AGENT}" --role="roles/storage.objectViewer" \
+        --condition=None --quiet >/dev/null 2>&1; then granted=1; break; fi
+    echo "    ...Vertex agent still provisioning — retry ${attempt}/6 in 10s"; sleep 10
+done
+if [[ "$granted" == "1" ]]; then
+    echo "    granted roles/storage.objectViewer to ${AIPLATFORM_AGENT}"
+else
+    echo "    WARNING: could not grant the Vertex agent storage read yet — it may still"
+    echo "             be provisioning (can take a few minutes on a fresh project)."
+    echo "             Re-run this script shortly; the verifier retries automatically."
+fi
+
 echo ">>> Ensuring Pub/Sub topics (correlator self-creates + seeks its own subscription)..."
 for topic in "$OBSERVATIONS_TOPIC" "$INCIDENTS_TOPIC"; do
     gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1 \
@@ -82,7 +107,6 @@ gcloud artifacts repositories describe "$REPO_NAME" --location="$REGION" --proje
     || gcloud artifacts repositories create "$REPO_NAME" --location="$REGION" \
         --repository-format=docker --description="Formula E services" --project="$PROJECT_ID"
 
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 CB_BUILD_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 for role in roles/logging.logWriter roles/artifactregistry.writer roles/storage.admin; do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \

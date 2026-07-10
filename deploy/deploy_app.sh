@@ -27,6 +27,9 @@ bash "${HERE}/deploy_correlator.sh"
 echo; echo ">>> [3/3] Race Control Console ..."
 bash "${HERE}/deploy_console.sh"
 
+echo; echo ">>> Green-light check ..."
+bash "${HERE}/verify_app.sh" || echo "    (verify reported issues — see the fixes above)"
+
 echo
 echo "##################################################################"
 echo "# Application tier deployed. Open the Console URL printed above."

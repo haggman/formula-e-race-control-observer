@@ -43,7 +43,11 @@ _CAP_S = float(os.environ.get("FE_GEMINI_BACKOFF_CAP", "8.0"))
 _RETRY_CODES = {408, 409, 429, 500, 502, 503, 504}
 _RETRY_TOKENS = ("RESOURCE_EXHAUSTED", "UNAVAILABLE", "INTERNAL", "DEADLINE",
                  "TIMEOUT", "TIMED OUT", "CONNECTION", "RESET", "TEMPORARIL",
-                 "OVERLOADED", "429", "500", "502", "503", "504")
+                 "OVERLOADED", "429", "500", "502", "503", "504",
+                 # Fresh-project Vertex: the AI service agent that reads the gs://
+                 # file is still provisioning ("try again in a few minutes"). This
+                 # arrives as a 400 FAILED_PRECONDITION, so match it by message.
+                 "BEING PROVISIONED", "TRY AGAIN")
 
 
 def _status_code(exc: Exception):
