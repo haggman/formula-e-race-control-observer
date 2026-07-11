@@ -62,7 +62,9 @@ _STOPPED_SIGNALS = {
 # a yaw spike that self-recovers isn't a flag, or we'd cry wolf every lap.
 # RECOVERED joins them for the note test: a yaw that later SETTLES is still benign.
 _SOFT_HINTS = {SignalType.YAW_SPIKE, SignalType.HARD_DECEL}
-_BENIGN_SIGNALS = _SOFT_HINTS | {SignalType.RECOVERED}
+# PIT_STOP joins them: a car stationary in the pit lane is routine, never a flag —
+# we surface it as a visible note, but it must not escalate or trigger a CCTV check.
+_BENIGN_SIGNALS = _SOFT_HINTS | {SignalType.RECOVERED, SignalType.PIT_STOP}
 
 
 # ============================================================================

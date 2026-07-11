@@ -42,6 +42,14 @@ BUFFER_S = 180.0         # keep Observations this long (race-time) for fusion �
                          # (video can lag the stop by ~90s) so both survive to fuse
 FUSE_EVERY_S = 2.0       # re-fuse the buffer this often
 
+# A race-clock discontinuity means the operator JUMPED or RESTARTED the sim. The
+# telemetry observer already resets itself on a jump; the correlator must too, or
+# the previous run's Observations linger in the 180s buffer and bleed into the next
+# incident (a car from the last jump turning up chipped on this one), and
+# already-announced incidents stay suppressed so a repeat run shows nothing.
+JUMP_BACK_S = 2.0        # race time never runs backwards on its own
+JUMP_FWD_S = 60.0        # a big forward leap = a jump (generous, so fast replay is safe)
+
 # Green flag (race_time_s = 0) — to turn an Observation's ts_utc into a race-second
 # for the video verifier (which slices the mosaic by race-second).
 GREEN_FLAG = datetime(2024, 5, 12, 13, 4, 0, tzinfo=timezone.utc)
@@ -96,6 +104,7 @@ class CorrelatorService:
         self.verifier = verifier                              # VideoVerifier or None
         self._clock = SimClock(sim_url) if sim_url else None  # to time the forward window
         self._verify: dict[tuple, dict] = {}                  # key -> {triggered, verdict, note}
+        self._last_race_s: float | None = None                # for jump/restart detection
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verify")
 
     # -- ingest --------------------------------------------------------------
@@ -270,7 +279,23 @@ class CorrelatorService:
             logger.warning("verification publish skipped (%s)", e)
 
     # -- fuse + announce -----------------------------------------------------
+    def _check_jump(self) -> None:
+        """Detect a sim jump/restart and wipe state that belongs to the old timeline."""
+        now = self._race_now()
+        if now is None:
+            return
+        last, self._last_race_s = self._last_race_s, now
+        if last is None:
+            return
+        if now < last - JUMP_BACK_S or now > last + JUMP_FWD_S:
+            logger.info("sim jumped (%.0fs → %.0fs) — clearing correlator state "
+                        "(buffer, announcements, verifications)", last, now)
+            self._buf.clear()
+            self._announced.clear()
+            self._verify.clear()
+
     def tick(self) -> list[IncidentReport]:
+        self._check_jump()
         """Fuse the current buffer; return reports for any new/escalated incident."""
         self._evict()
         reports: list[IncidentReport] = []

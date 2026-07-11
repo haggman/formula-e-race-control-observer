@@ -67,6 +67,7 @@ class TelemetryObserver:
         self._last_still: dict[int, float] = {}       # car -> last "still stopped" heartbeat epoch
         self._disturbed: dict[int, float] = {}        # car -> epoch of last yaw/decel disturbance
                                                       # (open "is it OK now?" watch until it settles)
+        self._pitted: dict[int, bool] = {}            # car -> PIT_STOP note already emitted
         self._last_frame_ts: float | None = None      # for jump/restart detection
 
     def process_frame(self, frame: RaceFrame) -> list[Observation]:
@@ -80,7 +81,7 @@ class TelemetryObserver:
                 now < self._last_frame_ts - 2 or now > self._last_frame_ts + JUMP_GAP_S):
             self._buf.clear(); self._stopped.clear(); self._stop_since.clear()
             self._escalated.clear(); self._last_fired.clear(); self._last_still.clear()
-            self._disturbed.clear()
+            self._disturbed.clear(); self._pitted.clear()
         self._last_frame_ts = now
         for s in frame.to_samples():
             car = s.car_number
@@ -90,11 +91,15 @@ class TelemetryObserver:
             while buf and buf[0].ts_utc.timestamp() < cutoff:
                 buf.pop(0)
 
-            for obs in detector.detect(buf, already_stopped=self._stopped.get(car, False)):
+            for obs in detector.detect(buf,
+                                       already_stopped=self._stopped.get(car, False),
+                                       already_pitted=self._pitted.get(car, False)):
                 if obs.signal == SignalType.STOPPED_CAR:
                     self._stopped[car] = True
                     self._stop_since.setdefault(car, obs.ts_utc.timestamp())
                     self._disturbed.pop(car, None)          # a stop supersedes a yaw watch
+                elif obs.signal == SignalType.PIT_STOP:
+                    self._pitted[car] = True                # say it once per pit stop
                 elif obs.signal in (SignalType.YAW_SPIKE, SignalType.HARD_DECEL):
                     self._disturbed[car] = now              # open/refresh the "is it OK now?" watch
                 key = (car, obs.signal.value)
@@ -128,6 +133,11 @@ class TelemetryObserver:
             # car never qualifies: its later movement is the recovery truck (tow
             # speed), not the car racing, so the Safety Car must hold.
             latest = buf[-1] if buf else None
+            # Rolling out of the box → the pit stop is over; re-arm the note for a
+            # later stop (a car can pit more than once).
+            if latest and latest.speed_kmh > 20:
+                self._pitted[car] = False
+
             if latest and latest.speed_kmh >= RECOVER_SPEED_KMH and not latest.is_retired:
                 if self._stopped.get(car, False):
                     out.append(_recovered_obs(latest))

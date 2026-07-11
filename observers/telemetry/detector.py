@@ -96,6 +96,7 @@ def detect(
     window: list[TelemetrySample],
     *,
     already_stopped: bool = False,
+    already_pitted: bool = False,
 ) -> list[Observation]:
     """Score one time-ordered window of samples for a SINGLE car.
 
@@ -119,13 +120,28 @@ def detect(
 
     # --- 1. Stopped car (primary) --------------------------------------------
     tail = _tail_within(window, STOP_HOLD_S)
-    if (
-        not already_stopped
-        and _span_s(tail) >= STOP_HOLD_S
-        and all(s.speed_kmh <= STOP_SPEED_KMH for s in tail)
-        # A car stopped in its PIT BOX is a pit stop, not a track incident.
-        and not in_pit_lane(tail[-1].lat, tail[-1].lng)
-    ):
+    stationary = (_span_s(tail) >= STOP_HOLD_S
+                  and all(s.speed_kmh <= STOP_SPEED_KMH for s in tail))
+    # A car stopped in its PIT BOX is a pit stop, not a track incident — this is the
+    # false-positive trap the whole system exists to avoid (a naive detector throws a
+    # Safety Car for a routine stop). We still SAY so, rather than staying silent:
+    # an invisible dismissal is indistinguishable from a broken observer.
+    in_pit = in_pit_lane(tail[-1].lat, tail[-1].lng) if tail else False
+
+    if stationary and in_pit and not already_pitted:
+        out.append(Observation(
+            modality=Modality.TELEMETRY,
+            signal=SignalType.PIT_STOP,
+            ts_utc=tail[0].ts_utc,
+            car_number=car,
+            confidence=STOP_CONF,
+            severity_hint=0,                      # note only — never a flag
+            location=_loc(tail[-1]),
+            summary=f"car {car} stationary in the pit lane — routine pit stop, "
+                    f"not a track incident",
+            evidence={"hold_s": round(_span_s(tail), 1), "pit_lane": True},
+        ))
+    elif stationary and not in_pit and not already_stopped:
         out.append(Observation(
             modality=Modality.TELEMETRY,
             signal=SignalType.STOPPED_CAR,
