@@ -83,6 +83,8 @@ def _on_observation(obs) -> None:
         "summary": obs.summary,
     }
     _recent_obs.append(data)                    # so a reconnecting browser can catch up
+    logger.info("← obs %s/%s car=%s (clients=%d)", data["modality"], data["signal"],
+                data["car_number"], len(_clients))
     _push({"type": "observation", "data": data})
 
 
@@ -111,6 +113,7 @@ def _subscribe_incidents() -> None:
     def cb(msg):
         try:
             payload = json.loads(msg.data)
+            logger.info("← incident %s (clients=%d)", payload.get("kind"), len(_clients))
             _push({"type": "incident", "data": payload})
         except Exception as e:
             logger.warning("bad incident msg: %s", e)
@@ -204,6 +207,8 @@ app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="
 async def ws(sock: WebSocket):
     await sock.accept()
     _clients.add(sock)
+    logger.info("browser connected (clients=%d) — replaying %d obs + incidents",
+                len(_clients), len(_recent_obs))
     # Replay the two sensor feeds from the ring buffer — observations are transient
     # on the bus, so without this a reconnect (or a recycled instance) would leave
     # the Telemetry/Video columns blank even though the run is mid-incident.

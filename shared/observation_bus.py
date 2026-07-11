@@ -19,25 +19,51 @@ OBSERVATIONS_TOPIC = "fe-observations"
 INCIDENTS_TOPIC = "fe-incidents"    # correlator → console (fused recommendations)
 
 
+def _ensure_topic(pub, topic_path: str, topic: str) -> None:
+    """Best-effort topic create. A failure here must NOT kill the publisher: the
+    topic is pre-created by the deploy scripts, and losing the publisher silently
+    disables a whole feed (that's how a Video/Race-Control blackout happens)."""
+    from google.api_core import exceptions
+    try:
+        pub.create_topic(name=topic_path)
+        logger.info("created topic %s", topic)
+    except exceptions.AlreadyExists:
+        pass
+    except Exception as e:                      # e.g. no create permission — topic exists anyway
+        logger.warning("could not create topic %s (%s) — assuming it already exists", topic, e)
+
+
+def _watch(future, what: str, topic: str) -> None:
+    """Pub/Sub publish() is fire-and-forget — the error lands in the Future and is
+    never seen. Attach a callback so a failed publish is LOUD instead of invisible."""
+    def _done(f):
+        try:
+            f.result()
+        except Exception as e:
+            logger.error("PUBLISH FAILED (%s → %s): %s", what, topic, e)
+    try:
+        future.add_done_callback(_done)
+    except Exception:
+        pass
+
+
 class IncidentPublisher:
     """Publishes correlator incident updates (kind + IncidentReport) to the bus."""
 
     def __init__(self, project: str | None = None, topic: str = INCIDENTS_TOPIC):
         from google.cloud import pubsub_v1
-        from google.api_core import exceptions
         self.project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        self.topic = topic
         self._pub = pubsub_v1.PublisherClient()
         self._topic_path = self._pub.topic_path(self.project, topic)
-        try:
-            self._pub.create_topic(name=self._topic_path)
-            logger.info("created topic %s", topic)
-        except exceptions.AlreadyExists:
-            pass
+        _ensure_topic(self._pub, self._topic_path, topic)
 
     def publish(self, kind: str, report) -> None:
         import json
         payload = json.dumps({"kind": kind, "report": report.model_dump(mode="json")})
-        self._pub.publish(self._topic_path, payload.encode("utf-8"))
+        fut = self._pub.publish(self._topic_path, payload.encode("utf-8"))
+        logger.info("→ published incident %s to %s", kind, self.topic)
+        _watch(fut, f"incident {kind}", self.topic)
 
 
 class ObservationPublisher:
@@ -45,21 +71,19 @@ class ObservationPublisher:
 
     def __init__(self, project: str | None = None, topic: str = OBSERVATIONS_TOPIC):
         from google.cloud import pubsub_v1
-        from google.api_core import exceptions
 
         self.project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
         if not self.project:
             raise RuntimeError("GOOGLE_CLOUD_PROJECT required to publish observations")
+        self.topic = topic
         self._pub = pubsub_v1.PublisherClient()
         self._topic_path = self._pub.topic_path(self.project, topic)
-        try:
-            self._pub.create_topic(name=self._topic_path)
-            logger.info("created topic %s", topic)
-        except exceptions.AlreadyExists:
-            pass
+        _ensure_topic(self._pub, self._topic_path, topic)
 
     def publish(self, obs: Observation) -> None:
-        self._pub.publish(self._topic_path, obs.model_dump_json().encode("utf-8"))
+        fut = self._pub.publish(self._topic_path, obs.model_dump_json().encode("utf-8"))
+        logger.info("→ published %s/%s obs to %s", obs.modality.value, obs.signal.value, self.topic)
+        _watch(fut, f"{obs.modality.value} obs", self.topic)
 
 
 def make_emit(project: str | None = None, *, also: Callable[[Observation], None] | None = None

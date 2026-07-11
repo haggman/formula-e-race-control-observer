@@ -201,6 +201,8 @@ class CorrelatorService:
         Agent feed shows it (one clean line per stop, not the old per-frame spam).
         The correlator ignores video obs in its own buffer, so this can't loop."""
         if self._obs_pub is None:
+            logger.error("video verdict NOT published (no fe-observations publisher) — "
+                         "the Video Agent column will look blank even though the check ran")
             return
         cam = verdict.cameras[0] if verdict.cameras else None
         label = {"blocked": "CONFIRMED — track blocked",
@@ -272,7 +274,10 @@ class CorrelatorService:
             try:
                 self._incident_pub.publish(kind, report)
             except Exception as e:
-                logger.warning("incident publish skipped (%s)", e)
+                logger.error("incident publish FAILED (%s) — Race Control column won't update", e)
+        else:
+            logger.error("incident NOT published (no fe-incidents publisher) — the Race Control "
+                         "column will look blank even though the incident was drafted")
 
     def _write_firestore(self, report: IncidentReport) -> None:
         try:
@@ -297,12 +302,16 @@ def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
     svc = CorrelatorService(use_llm=use_llm, sim_url=os.environ.get("SIM_URL"))
     try:
         svc._incident_pub = observation_bus.IncidentPublisher(project)
+        logger.info("fe-incidents publisher READY — recommendations will reach the console")
     except Exception as e:
-        logger.warning("fe-incidents publisher unavailable (%s) — console live feed off", e)
+        logger.error("!! fe-incidents publisher UNAVAILABLE (%s) — the Race Control column "
+                     "will stay BLANK. Fix this before running.", e)
     try:
         svc._obs_pub = observation_bus.ObservationPublisher(project)   # verifier → Video feed
+        logger.info("fe-observations publisher READY — video verdicts will reach the console")
     except Exception as e:
-        logger.warning("fe-observations publisher unavailable (%s) — Video feed off", e)
+        logger.error("!! fe-observations publisher UNAVAILABLE (%s) — the Video Agent column "
+                     "will stay BLANK. Fix this before running.", e)
 
     from shared.heartbeat import Heartbeat
     hb_corr = Heartbeat("correlator", project=project); hb_corr.set("online"); hb_corr.start()
