@@ -254,7 +254,7 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     if len(stopped_cars) >= 2 or confirmed_stop or prolonged or incident.severity >= 85:
         return FlagRecommendation(
             flag=FlagType.SAFETY_CAR, turns=turns,
-            rationale=_stopped_rationale(stopped_cars, incident)
+            rationale=_stopped_rationale(stopped_cars, incident, recovered_cars)
             + (f" {incident.video_note}" if video_blocked and incident.video_note else ""),
         )
     if stopped:
@@ -288,12 +288,23 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     )
 
 
-def _stopped_rationale(stopped_cars: set[int], incident: CorrelatedIncident) -> str:
-    who = ", ".join(f"#{c}" for c in sorted(stopped_cars)) or "a car"
+def _stopped_rationale(stopped_cars: set[int], incident: CorrelatedIncident,
+                       recovered: set[int] | None = None) -> str:
+    """Name who is STILL blocking, and say plainly who has already recovered — so a
+    multi-car flag doesn't keep implicating a car that has driven away."""
+    recovered = (recovered or set()) & stopped_cars
+    still = sorted(stopped_cars - recovered)
+    who = ", ".join(f"#{c}" for c in still) or "a car"
     where = f" at {incident.location.turn}" if incident.location.turn else ""
     confirmed = incident.corroborated or incident.video_verdict == "blocked"
     corr = " Confirmed by both telemetry and video." if confirmed else ""
-    return f"Stopped car(s) {who}{where} — track obstruction.{corr}"
+    back = ""
+    if recovered:
+        names = ", ".join(f"#{c}" for c in sorted(recovered))
+        verb = "is" if len(recovered) == 1 else "are"
+        back = (f" {names} {verb} racing again, but the flag stands while "
+                f"{who} {'remains' if len(still) == 1 else 'remain'} stranded.")
+    return f"Stopped car(s) {who}{where} — track obstruction.{corr}{back}"
 
 
 def _has(incident: CorrelatedIncident, signal: SignalType) -> bool:

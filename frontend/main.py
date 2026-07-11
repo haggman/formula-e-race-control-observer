@@ -290,8 +290,14 @@ def _schedule_autopause(pause_at) -> None:
 @app.post("/control/jump")
 async def jump(body: dict):
     """Jump to a flag point: pause → jump → resume (so the incident replays live),
-    and arm a server-side auto-pause at the end of the window if requested."""
+    and arm a server-side auto-pause at the end of the window if requested.
+
+    A jump is a FRESH RUN, so it clears the board for everyone first — the replay
+    ring AND the stored incidents. Without the Firestore wipe, the previous run's
+    recommendations resurrect on the next browser reconnect."""
     _recent_obs.clear()          # the board resets on a jump — don't replay the old run
+    _wipe_incidents()            # ...and don't let the last run's cards come back
+    _push({"type": "cleared"})   # tell every open browser to reset its board
     await _sim_post("/pause")
     await _sim_post("/jump", {"race_time_s": body.get("race_time_s", 0)})
     _schedule_autopause(body.get("pause_at"))
@@ -332,10 +338,9 @@ async def speed(body: dict):
 
 
 # --- clear the board (wipe stale incidents so snapshots don't resurrect) ---
-@app.post("/incidents/clear")
-async def clear_incidents():
-    _cancel_autopause()
-    _recent_obs.clear()          # Clear/Restart wipe the board — drop the replay ring too
+def _wipe_incidents() -> int:
+    """Delete stored incidents so a previous run can't resurrect on the next
+    reconnect. Shared by the Clear button and by every jump (a jump = a fresh run)."""
     try:
         from google.cloud import firestore
         db = firestore.Client(project=PROJECT_ID)
@@ -343,8 +348,17 @@ async def clear_incidents():
         for d in db.collection("incidents").stream():
             d.reference.delete()
             n += 1
+        return n
     except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        logger.warning("incident wipe failed (%s)", e)
+        return 0
+
+
+@app.post("/incidents/clear")
+async def clear_incidents():
+    _cancel_autopause()
+    _recent_obs.clear()          # Clear/Restart wipe the board — drop the replay ring too
+    n = _wipe_incidents()
     _push({"type": "cleared"})
     return {"ok": True, "deleted": n}
 

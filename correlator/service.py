@@ -76,14 +76,23 @@ _FLAG_RANK = {
 
 
 def _incident_key(inc: CorrelatedIncident) -> tuple:
-    """A stable key so the same ongoing incident isn't re-announced: the cars
-    involved + a coarse time bucket. Deliberately NOT keyed on turn/location —
-    those fill in as more observations (esp. video) arrive, and we want the
-    telemetry-only stop and its later video corroboration to share a key so the
-    second is seen as an ESCALATION, not a new incident."""
-    cars = tuple(sorted(inc.car_numbers))
+    """A STABLE identity for an ongoing incident, so it isn't re-announced as new.
+
+    Deliberately NOT keyed on the car list: cars ACCRETE as more of them stop (e.g.
+    #48 joining #23's crash 50s later). If the key changed when a car joined, the
+    SAME incident would be re-announced as NEW and re-verified — producing duplicate
+    recommendation cards and a duplicate (billable) CCTV sweep.
+
+    Nor on turn/location — those fill in as video arrives, and we want the
+    telemetry-only stop and its later corroboration to share a key so the second is
+    an ESCALATION, not a new incident.
+
+    What DOESN'T change as a cluster grows is its ANCHOR: the earliest contributing
+    observation. So key on that — its coarse time bucket (tolerant of small
+    out-of-order arrivals) plus the car that started it."""
     bucket = int(inc.ts_utc.timestamp() // 30)
-    return (cars, bucket)
+    anchor_car = inc.observations[0].car_number if inc.observations else None
+    return (bucket, anchor_car)
 
 
 class CorrelatorService:
@@ -304,8 +313,13 @@ class CorrelatorService:
             self._maybe_verify(inc, key)                    # attach verdict / trigger check
             flag = fusion.recommend_flag(inc)
             rank = _FLAG_RANK.get(flag.flag, 0)
-            prev = self._announced.get(key)                 # (rank, verdict, corroborated) or None
+            prev = self._announced.get(key)     # (rank, verdict, corroborated, n_recovered)
             verdict = inc.video_verdict
+            # How many of the stopped cars are racing again? If that GROWS but a flag
+            # still stands (another car is still blocking), that's news worth saying —
+            # otherwise the board silently keeps naming a car that has already left.
+            n_rec = len({o.car_number for o in inc.observations
+                         if o.signal == SignalType.RECOVERED and o.car_number is not None})
 
             if prev is None:
                 kind = "NEW"
@@ -317,6 +331,8 @@ class CorrelatorService:
                 kind = "CONFIRMED"                          # only meaningful while a flag is active
             elif rank > 0 and inc.corroborated and not prev[2]:
                 kind = "CONFIRMED"
+            elif rank > 0 and n_rec > prev[3]:
+                kind = "RECOVERY"                           # a car is racing again, but the flag stands
             else:
                 continue                                    # nothing new to say (terminal once cleared)
 
@@ -324,7 +340,8 @@ class CorrelatorService:
                 continue                                    # a brand-new no-flag note isn't worth a card
             stored_v = "cleared" if kind == "CLEARED" else (verdict or (prev[1] if prev else None))
             self._announced[key] = (max(rank, prev[0] if prev else 0), stored_v,
-                                    inc.corroborated or (prev[2] if prev else False))
+                                    inc.corroborated or (prev[2] if prev else False),
+                                    max(n_rec, prev[3] if prev else 0))
 
             report = reporter.draft_report(inc, llm=self.use_llm)
             reports.append(report)
