@@ -53,6 +53,13 @@ VERIFY_TAIL_S = 55.0
 # provisioning), retry this many times (~a minute each) before giving up.
 VERIFY_MAX_ATTEMPTS = 3
 
+# The CCTV window the verifier will actually look at (mirrors the verifier's own
+# constants) — so we can TELL the operator which footage we're reviewing.
+try:
+    from observers.video.verifier import LEAD_S as VIDEO_LEAD_S, TAIL_S as VIDEO_TAIL_S
+except Exception:                        # verifier unavailable (telemetry-only mode)
+    VIDEO_LEAD_S, VIDEO_TAIL_S = 10, 50
+
 # Flag severity ordering — used to decide what counts as an ESCALATION.
 _FLAG_RANK = {
     FlagType.NONE: 0, FlagType.YELLOW: 1, FlagType.DOUBLE_YELLOW: 2,
@@ -141,18 +148,32 @@ class CorrelatorService:
         if stop_time is None:
             return
         now = self._race_now()
-        if now is not None and now < stop_time + VERIFY_TAIL_S:
-            return                                          # window hasn't played yet
         prev = self._verify.get(key) or {}
-        if not prev.get("investigating_sent"):              # announce the check ONCE (survives retries)
-            who = f" for car #{inc.car_numbers[0]}" if inc.car_numbers else ""
-            self._publish_video_note(int(stop_time),
-                                     f"[INVESTIGATING] checking CCTV footage{who}…",
-                                     cars=list(inc.car_numbers))
+        win = self._window_str(stop_time)
+        who = f"car #{inc.car_numbers[0]}" if inc.car_numbers else "the stopped car"
+
+        if now is not None and now < stop_time + VERIFY_TAIL_S:
+            # The footage we need hasn't PLAYED yet (we confirm from what happened,
+            # never by peeking ahead). Say so immediately, so the Video Agent isn't
+            # mutely idle for the ~55s it's waiting — and the operator sees why.
+            if not prev.get("queued_sent"):
+                prev["queued_sent"] = True
+                self._verify[key] = prev
+                self._publish_video_note(
+                    f"[QUEUED] {who} stopped — CCTV review scheduled once the {win} "
+                    f"window has played…", cars=list(inc.car_numbers), at=now)
+                logger.info("CCTV review queued for stop @%ds (window %s)", int(stop_time), win)
+            return
+
+        if not prev.get("analyzing_sent"):                  # announce ONCE (survives retries)
+            self._publish_video_note(
+                f"[ANALYZING] reviewing CCTV {win} across all camera groups…",
+                cars=list(inc.car_numbers), at=now if now is not None else stop_time)
         self._verify[key] = {"triggered": True, "verdict": None, "note": None,
-                             "investigating_sent": True, "attempts": prev.get("attempts", 0)}
+                             "queued_sent": True, "analyzing_sent": True,
+                             "attempts": prev.get("attempts", 0)}
         self._pool.submit(self._run_verify, key, int(stop_time), list(inc.car_numbers))
-        logger.info("verifying stop @%ds on CCTV (all groups)…", int(stop_time))
+        logger.info("verifying stop @%ds on CCTV (all groups, window %s)…", int(stop_time), win)
 
     def _run_verify(self, key: tuple, stop_time: int, cars: list) -> None:
         try:
@@ -179,16 +200,32 @@ class CorrelatorService:
                     f" ({', '.join(verdict.cameras)})" if verdict.cameras else "")
         self._publish_verification(stop_time, verdict, cars)   # → console Video Agent feed
 
-    def _publish_video_note(self, stop_time: int, text: str, cars=None) -> None:
-        """Publish a lightweight STATUS line to the Video Agent feed (e.g. the
-        'investigating…' beat when a check starts) — distinct from a verdict, and
-        never a safety signal (evidence.status marks it, low severity)."""
+    @staticmethod
+    def _window_str(stop_time: float) -> str:
+        """The CCTV window we review, as wall-clock — so the feed can say exactly
+        which footage was (or will be) looked at, not just when the stop happened."""
+        a = GREEN_FLAG + timedelta(seconds=stop_time - VIDEO_LEAD_S)
+        b = GREEN_FLAG + timedelta(seconds=stop_time + VIDEO_TAIL_S)
+        return f"{a:%H:%M:%S}–{b:%H:%M:%S}"
+
+    def _stamp(self, at: float | None, fallback: float) -> datetime:
+        """Timestamp a Video Agent line with WHEN THE AGENT SPOKE (race clock), not
+        the incident time — otherwise every beat carries the stop's timestamp and
+        the feed looks like it all happened at once."""
+        s = at if at is not None else fallback
+        return GREEN_FLAG + timedelta(seconds=float(s))
+
+    def _publish_video_note(self, text: str, cars=None, at: float | None = None) -> None:
+        """Publish a lightweight STATUS line to the Video Agent feed (queued /
+        analyzing) — distinct from a verdict, and never a safety signal
+        (evidence.status marks it, low severity)."""
         if self._obs_pub is None:
+            logger.error("video note NOT published (no fe-observations publisher)")
             return
         try:
             self._obs_pub.publish(Observation(
                 modality=Modality.VIDEO, signal=SignalType.STATIONARY_CAR_VISUAL,
-                ts_utc=GREEN_FLAG + timedelta(seconds=int(stop_time)),
+                ts_utc=self._stamp(at, 0.0),
                 confidence=0.3, severity_hint=5,
                 car_number=(cars[0] if cars else None),
                 summary=text,
@@ -213,16 +250,22 @@ class CorrelatorService:
         # couldn't read a number do we fall back to the telemetry-flagged car(s).
         seen = getattr(verdict, "identified", None)
         video_cars = [seen] if seen else list(cars or [])
+        # State the evidence: which footage this verdict is actually based on.
+        win = self._window_str(stop_time)
+        detail = (verdict.description or "").strip()
+        if verdict.state in ("blocked", "cleared", "unseen"):
+            detail = f"{detail} · reviewed CCTV {win}".lstrip(" ·").strip()
         try:
             self._obs_pub.publish(Observation(
                 modality=Modality.VIDEO, signal=SignalType.STATIONARY_CAR_VISUAL,
-                ts_utc=GREEN_FLAG + timedelta(seconds=stop_time),
+                ts_utc=self._stamp(self._race_now(), stop_time),
                 confidence=float(verdict.confidence or 0.5),
                 severity_hint=(85 if verdict.state == "blocked" else 10),
                 car_number=(video_cars[0] if video_cars else None),
                 location=TrackLocation(camera_id=cam),
-                summary=f"[{label}] {verdict.description}",
-                evidence={"verifier": True, "verdict": verdict.state, "cars": video_cars}))
+                summary=f"[{label}] {detail}",
+                evidence={"verifier": True, "verdict": verdict.state,
+                          "cars": video_cars, "window": win}))
         except Exception as e:
             logger.warning("verification publish skipped (%s)", e)
 
