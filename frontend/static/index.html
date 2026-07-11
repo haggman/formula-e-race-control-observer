@@ -367,11 +367,17 @@ async function pollStatus(){
 }
 
 // ---- websocket ----
+let _wsTimer=null;
 function connect(){
   const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
-  ws.onopen=()=>document.getElementById('live').classList.add('live');
-  ws.onclose=()=>{document.getElementById('live').classList.remove('live');setTimeout(connect,2000);};
-  ws.onmessage=e=>{const m=JSON.parse(e.data);
+  const live=document.getElementById('live');
+  let lastRx=Date.now();                                // last time we heard ANYTHING
+  ws.onopen=()=>{lastRx=Date.now();live.classList.add('live');};
+  ws.onclose=()=>{live.classList.remove('live');clearInterval(_wsTimer);setTimeout(connect,2000);};
+  ws.onerror=()=>{try{ws.close();}catch(e){}};        // surface half-open as a close → reconnect
+  ws.onmessage=e=>{lastRx=Date.now();
+    let m; try{m=JSON.parse(e.data);}catch(err){return;}
+    if(m.type==='heartbeat')return;                    // liveness keepalive only
     if(m.type==='observation')onObservation(m.data);
     else if(m.type==='incident')onIncident(m.data);
     else if(m.type==='cars')onCars(m);
@@ -380,7 +386,14 @@ function connect(){
     else if(m.type==='agents'){onAgents(m.agents);}
     else if(m.type==='autopaused'){onAutoPaused();}
   };
-  setInterval(()=>{try{ws.send('ping')}catch(e){}},15000);
+  clearInterval(_wsTimer);                             // never stack intervals across reconnects
+  _wsTimer=setInterval(()=>{
+    try{ws.send('ping');}catch(e){}
+    // Silent-death watchdog: the server heartbeats every ~10s, so no traffic at
+    // all for 25s means the socket is half-open (e.g. the console instance was
+    // recycled) — force a close so onclose reconnects us to the live instance.
+    if(Date.now()-lastRx>25000){try{ws.close();}catch(e){}}
+  },5000);
 }
 initJumps().then(connect);
 pollStatus(); setInterval(pollStatus,2000);

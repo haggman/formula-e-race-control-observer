@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+from collections import deque
 from typing import Any
 
 import httpx
@@ -42,6 +43,13 @@ _clients: set[WebSocket] = set()
 _queue: "asyncio.Queue[dict]" = asyncio.Queue()
 _loop: asyncio.AbstractEventLoop | None = None
 
+# Recent raw observations, replayed to a (re)connecting browser so the two sensor
+# feeds survive a reconnect. Recommendations already survive (they're persisted to
+# Firestore); observations are transient on the bus, so we keep a short ring here.
+# Cleared whenever the board resets (jump / clear / restart) so we never replay
+# lines that belong to a previous run.
+_recent_obs: deque[dict] = deque(maxlen=300)
+
 
 def _push(event: dict) -> None:
     """Thread-safe enqueue from Pub/Sub callback threads → the asyncio loop."""
@@ -65,7 +73,7 @@ async def _broadcaster() -> None:
 # --- bus subscriptions (run in Pub/Sub's background threads) ---------------
 def _on_observation(obs) -> None:
     loc = obs.location
-    _push({"type": "observation", "data": {
+    data = {
         "modality": obs.modality.value, "signal": obs.signal.value,
         "ts_utc": obs.ts_utc.isoformat(), "car_number": obs.car_number,
         "severity": obs.severity_hint, "confidence": obs.confidence,
@@ -73,7 +81,9 @@ def _on_observation(obs) -> None:
                                             if loc.gps_lat is not None else None),
         "cars": obs.evidence.get("cars", []),   # flagged car(s), for the car chips
         "summary": obs.summary,
-    }})
+    }
+    _recent_obs.append(data)                    # so a reconnecting browser can catch up
+    _push({"type": "observation", "data": data})
 
 
 def _subscribe_incidents() -> None:
@@ -157,11 +167,21 @@ async def _poll_agents() -> None:
         await asyncio.sleep(2.0)
 
 
+async def _heartbeat() -> None:
+    """Push a tiny keepalive to every client every 10s. Gives connected browsers
+    steady traffic so their watchdog can detect a half-open socket (e.g. after this
+    instance is recycled) and reconnect, instead of sitting on a silently-dead WS."""
+    while True:
+        await asyncio.sleep(10.0)
+        _push({"type": "heartbeat"})
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     global _loop
     _loop = asyncio.get_running_loop()
     asyncio.create_task(_broadcaster())
+    asyncio.create_task(_heartbeat())
     asyncio.create_task(_poll_cars())
     asyncio.create_task(_poll_agents())
     if PROJECT_ID:
@@ -184,6 +204,14 @@ app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="
 async def ws(sock: WebSocket):
     await sock.accept()
     _clients.add(sock)
+    # Replay the two sensor feeds from the ring buffer — observations are transient
+    # on the bus, so without this a reconnect (or a recycled instance) would leave
+    # the Telemetry/Video columns blank even though the run is mid-incident.
+    try:
+        for data in list(_recent_obs):
+            await sock.send_json({"type": "observation", "data": data})
+    except Exception:
+        pass
     # replay current incidents from Firestore so a late-joining browser is caught up
     try:
         from google.cloud import firestore
@@ -258,6 +286,7 @@ def _schedule_autopause(pause_at) -> None:
 async def jump(body: dict):
     """Jump to a flag point: pause → jump → resume (so the incident replays live),
     and arm a server-side auto-pause at the end of the window if requested."""
+    _recent_obs.clear()          # the board resets on a jump — don't replay the old run
     await _sim_post("/pause")
     await _sim_post("/jump", {"race_time_s": body.get("race_time_s", 0)})
     _schedule_autopause(body.get("pause_at"))
@@ -301,6 +330,7 @@ async def speed(body: dict):
 @app.post("/incidents/clear")
 async def clear_incidents():
     _cancel_autopause()
+    _recent_obs.clear()          # Clear/Restart wipe the board — drop the replay ring too
     try:
         from google.cloud import firestore
         db = firestore.Client(project=PROJECT_ID)
