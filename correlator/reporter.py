@@ -52,6 +52,26 @@ def _template_narrative(incident: CorrelatedIncident, flag) -> str:
     )
 
 
+def _clean_narrative(text: str) -> str:
+    """Scrub model artifacts out of the drafted prose before it goes on the board.
+
+    Gemini occasionally leaks markdown into an otherwise clean paragraph — a code
+    fence, or a dangling emphasis character (we shipped a report ending "...is
+    recommended._"). Race Control shouldn't be reading the model's punctuation
+    scraps, so strip them.
+    """
+    import re
+    s = (text or "").strip()
+    if s.startswith("```"):                       # ```json / ```text fences
+        s = s.strip("`").strip()
+        if "\n" in s and " " not in s.split("\n", 1)[0]:
+            s = s.split("\n", 1)[1]
+    s = re.sub(r"\s+", " ", s).strip()            # one clean paragraph
+    s = re.sub(r"^[_*`\s]+", "", s)               # leading emphasis junk
+    s = re.sub(r"[_*`\s]+$", "", s)               # trailing emphasis junk (the "._")
+    return s.strip()
+
+
 def _llm_narrative(incident: CorrelatedIncident, flag, model: str | None) -> str:
     """Gemini-drafted prose. Runs where Vertex/Gemini creds exist (Cloud Shell)."""
     import os
@@ -75,7 +95,7 @@ def _llm_narrative(incident: CorrelatedIncident, flag, model: str | None) -> str
         contents=facts,
         config={"system_instruction": prompts.SYSTEM_INSTRUCTION, "temperature": 0.2},
     ), what="report")
-    return (resp.text or "").strip()
+    return _clean_narrative(resp.text)
 
 
 def draft_report(
