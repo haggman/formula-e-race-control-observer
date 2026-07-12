@@ -111,6 +111,24 @@ This makes the student's verifier load-bearing across **all three** incident but
 It also hands us a bonus for free: *"we just made the system helpless without a
 camera — is that acceptable?"* (See Bonus 3, graceful degradation.)
 
+### ✅ VERIFIED against the real telemetry (not assumed)
+
+The change was applied temporarily and run against `frames.jsonl.gz`. Result:
+
+| Button | Starter (no video) | Their verifier working |
+|---|---|---|
+| #33 (pit) | NONE | NONE *(pit guard — unaffected, as intended)* |
+| **Günther** | DOUBLE YELLOW | **SAFETY CAR** |
+| **Fenestraz + Nato** | DOUBLE YELLOW | **SAFETY CAR** |
+| **Mortara** | DOUBLE YELLOW | **SAFETY CAR** |
+
+Every incident button flips from double yellow to Safety Car the moment their
+verifier returns `blocked`. The arc works. The `RECOVERY` and `CLEARED` paths are
+upstream of this branch and are unaffected.
+
+**Note:** this change is NOT yet committed — the working app still has the old
+policy. Applying it is the executing session's job (one line in `fusion.py`).
+
 ---
 
 ## 5. Architecture: given / built / run locally
