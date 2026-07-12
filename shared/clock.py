@@ -1,10 +1,14 @@
 """SimClock — the shared race clock, read from the simulator's /status.
 
 The telemetry simulator owns the authoritative ReplayClock; it exposes
-`race_time_s` on /status. Both observers key off it, which is what keeps video and
-telemetry in sync without any second clock. The video observer also uses it as the
-on/off switch: when race_time_s stops advancing (sim paused/ended), the observer
-closes its Gemini Live session.
+`race_time_s` on /status. Everything that needs to know "what race-second is it
+right now" keys off this, which is what keeps the correlator's video window in
+sync with the telemetry without inventing a second clock.
+
+The correlator uses it for two things:
+  - to know when a stop's forward CCTV window has actually PLAYED (so we confirm
+    from what happened rather than peeking ahead), and
+  - to detect a jump/restart (a race-clock discontinuity) and reset its state.
 """
 from __future__ import annotations
 

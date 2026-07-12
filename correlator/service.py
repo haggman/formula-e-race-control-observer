@@ -30,7 +30,7 @@ from shared.models import (CorrelatedIncident, FlagType, IncidentReport,     # n
                            Modality, Observation, SignalType, TrackLocation)
 from shared.lifecycle import Session                                                 # noqa: E402
 from shared import observation_bus                                                    # noqa: E402
-from observers.video.clock import SimClock                                           # noqa: E402
+from shared.clock import SimClock                                           # noqa: E402
 from correlator import fusion, reporter                                              # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
