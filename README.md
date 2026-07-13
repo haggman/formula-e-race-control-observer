@@ -1,42 +1,97 @@
-# Formula E — The Proactive Race Control Observer
+# Formula E — The Proactive Race Control Observer (Challenge 3)
 
-> **Status:** under construction. See **[PLAN.md](PLAN.md)** for the design,
-> decisions, and progress log.
+An automated, tireless set of eyes for Race Control. Two independent observers watch
+the **2024 Berlin E-Prix (Round 10)** as it replays at 1 Hz — one reading the live
+**telemetry**, one reading the trackside **CCTV** — and a deterministic **correlator**
+fuses their reports, decides a recommended flag, drafts a preliminary incident report,
+and queues it for a human official to approve with **one click**. The human decides;
+the system prepares the decision.
 
-An automated, tireless set of eyes for Race Control. Two independent observers
-watch the **2024 Berlin E-Prix (Round 10)** as it replays — one reading the live
-**CCTV** feed, one reading the live **telemetry** — and a supervising agent
-**correlates** their reports, scores severity, drafts a preliminary incident
-report, and queues a recommended flag deployment for a human official to approve
-with **one click**.
+This is a **hackathon**: the whole stack is given and running, and you build **one
+focused component** — the **Video Verifier** — then watch it authorise a Safety Car in
+a console you didn't have to write.
 
-## The three agents
+> **The house rule:** *deterministic code decides WHEN to spend a model call; the model
+> decides WHAT it's looking at.* A cheap, reliable detector notices a stopped car; only
+> then is Gemini invited to look — at a bounded window, with one well-posed question.
 
-| Agent | Watches | How | Decides |
-|---|---|---|---|
-| **Video Observer** | CCTV feed | Gemini Live API, ~1 FPS | persistent conditions — stopped car, debris, dust |
-| **Telemetry Observer** | 20 Hz telemetry | deterministic trigger → agent | speed→0, hard decel, yaw spike |
-| **Correlator / Reporter** | the two observers (via A2A) | fuse within a tolerance window | severity, report, flag recommendation |
+## Where to go (pick your reader)
 
-The house rule from the other two hacks holds: **deterministic code decides
-*when*, the model decides *what*.** The telemetry trigger is the clearest "when";
-the model reasoning describes and correlates the "what."
+| You are… | Read |
+|---|---|
+| **In the hackathon room, building** | [`STUDENT_GUIDE.md`](STUDENT_GUIDE.md) — the tasks, the commands, the "why" |
+| **New to the codebase** | [`HOW_IT_WORKS.md`](HOW_IT_WORKS.md) — the ten-minute orientation, read before editing |
+| **Running the event** | [`RUN_OF_SHOW.md`](RUN_OF_SHOW.md) — morning-of, the opening, checkpoint beats |
+| **Driving the demo** | [`DEMO.md`](DEMO.md) — the pit wall, the scripted moments, the question bank |
+| **Finished early** | [`BONUS.md`](BONUS.md) — the stretch board (concurrency, livery ID, graceful degradation…) |
+| **Lost in the tree** | [`FILE_INDEX.md`](FILE_INDEX.md) — every file, one line each |
+| **Validating a fresh deploy** | [`SMOKE_TEST.md`](SMOKE_TEST.md) — a ~15-minute green-light pass |
 
-## Repo layout (build in progress)
+## Quick start
 
-```
-shared/         Pydantic contracts (telemetry samples, observations, incident report).
-observers/
-  telemetry/    Deterministic detector (the "when") + the characterizing agent.
-  video/        Gemini Live 1 FPS observer.
-correlator/     The supervising agent — fuse, score, report, recommend.
-frontend/       Race Control console (the one-click approve/reject surface).
-scripts/        Local test / probe harnesses (run them, don't edit them).
-setup/ deploy/  Idempotent provisioning (Pub/Sub, Firestore, Cloud Run, agents).
-docs/           Architecture diagram + assets.
+```bash
+source activate.sh        # venv + project + the starter/solution seam (VERIFIER_PACKAGE)
+bash setup/all.sh         # prints your Colab link first, then stands up the stack (~15 min)
 ```
 
-Media and large data are **not** committed — they live in the `class-demo` GCS
-bucket (and locally in `../_video_scratch/`). The hero incident is **Fenestraz
-#23 at ~13:32:11 UTC** (retirement stop, corroborated by race control's safety
-car at 13:32:28); see PLAN.md.
+`setup/all.sh` deploys the data layer and the deployed agents (telemetry observer +
+console) and stages the mosaics. The **correlator is NOT deployed** — it holds the file
+you edit, so you run it locally and restart it in seconds:
+
+```bash
+python -m correlator.service --no-verify     # Task 0: telemetry only (the "one sense" state)
+python -m correlator.service                 # Task 3: with YOUR verifier armed
+```
+
+## What you build
+
+**The Video Verifier** — Gemini-powered CCTV confirmation of a telemetry stop. It reads
+a **`gs://` mosaic *slice*** by time offset (no download, no ffmpeg, no frame extraction),
+asks one persistence question, and fuses six per-camera-group replies into one verdict.
+You implement three methods in `starter/video_verifier/verifier.py`
+(`_prompt`, `_verify_group`, `_aggregate`); everything else runs for you. The complete
+answer key is `solution/video_verifier/verifier.py`.
+
+## Architecture (as built)
+
+```
+  simulator ──fe-telemetry──▶ Telemetry Observer ──┐
+   (1 Hz replay)              (deterministic         │ fe-observations
+                               stopped/prolonged/    ▼
+                               recovered detector)   Correlator  ──fe-incidents──▶ Console
+                                                     (fuse → flag → report)        (one-click
+   mosaics bucket ◀── gs:// slice ── Video Verifier ─┘  ▲                            approve)
+   (6× 2×2 CCTV mosaics)            (YOU build this;     │
+                                     Gemini reads a      └── writes incidents/ + agent_status/
+                                     bounded window)         to Firestore
+```
+
+Two senses, because one is ambiguous: a car stopped in the pit lane and a car stopped in
+a blind corner look **identical in telemetry**. Telemetry raises its hand; the camera
+answers *is the racing line actually blocked?* The flag policy is deterministic code
+(`correlator/fusion.py`), not a model call — a safety decision must be explainable and
+repeatable.
+
+## Repo map
+
+- `starter/video_verifier/` — **the file you build** (`solution/` is the answer key).
+- `observers/telemetry/` — the deterministic detector (given; short, read it).
+- `correlator/` — fusion (the flag policy), the runtime service, the report drafter.
+- `shared/` — Pydantic contracts, the bus, the sim clock, the Gemini client, `verifier_pkg`.
+- `frontend/` — the Race Control console (given).
+- `simulator/`, `state_writer/` — the race replaying at 1 Hz (given).
+- `setup/` — one-command provisioning ladder; `deploy/` — the underlying deploy scripts.
+- `notebooks/fe_video_lab.ipynb` — your workbench (explore, prove alignment, tune the prompt).
+- `prelab/` — one-time instructor tooling (mosaic building, etc.).
+
+## Race context
+
+The data is the real **Berlin R10** telemetry (`simulator/src/frames.jsonl.gz`, 1 Hz).
+The demo incidents are real: **Günther #7** retires on track at race-second 693;
+**Fenestraz #23 + Nato #17** stop together at 1692 (Nato recovers, Fenestraz stays);
+**Mortara #48** stops at 1780; **Ticktum #33** makes a routine pit stop at 94 (correctly
+*not* flagged). Green flag = 13:04:00 UTC.
+
+## License
+
+MIT.

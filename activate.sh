@@ -45,7 +45,7 @@ if [[ -f "$REQ_FILE" ]]; then
     fi
 fi
 
-# --- Vertex AI / Gemini (the Live video observer + the reporter agent) ---
+# --- Vertex AI / Gemini (the video verifier + the reporter agent) ---
 export GOOGLE_GENAI_USE_VERTEXAI=1
 export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
 export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
@@ -73,6 +73,16 @@ export MOSAICS_BUCKET="${MOSAICS_BUCKET:-${PROJECT_ID}-fe-mosaics}"
 # --- Race + demo constants ---
 export RACE_ID="${RACE_ID:-berlin_2024_r10}"
 
+# --- Video Verifier package (the starter/solution seam) ---
+# Which package the correlator loads the VideoVerifier from:
+#   starter.video_verifier  = the student build (DEFAULT — you work here)
+#   solution.video_verifier = the complete reference (the answer key)
+# Demoing the reference / running the instructor build:
+#   export VERIFIER_PACKAGE=solution.video_verifier   (before sourcing, or per-run)
+# (The code default in shared/verifier_pkg.py is solution, so a deployed container
+#  that never sources this file still gets the working reference.)
+export VERIFIER_PACKAGE="${VERIFIER_PACKAGE:-starter.video_verifier}"
+
 # --- Cache the dynamic values so future shells pick them up instantly ---
 {
     [[ -n "${SIM_URL:-}" ]] && echo "export SIM_URL=${SIM_URL}"
@@ -88,4 +98,5 @@ echo "  Region:    $REGION"
 echo "  Venv:      $VENV_DIR"
 echo "  Simulator: ${SIM_URL:-(none — run setup/all.sh)}"
 echo "  Mosaics:   gs://${MOSAICS_BUCKET}"
+echo "  Verifier:  ${VERIFIER_PACKAGE}"
 echo "=================================================================="

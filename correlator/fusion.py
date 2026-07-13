@@ -209,9 +209,12 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     Policy (the VideoVerifier's verdict is the escalator/veto):
       - video verdict "cleared" (car recovered / line clear) → NONE, whatever
         telemetry said — this is the false-alarm veto
-      - video verdict "blocked", stop confirmed by BOTH senses, >=2 cars stopped,
-        a telemetry PROLONGED_STOP, or sev >= 85                → SAFETY_CAR
-      - single-sensor stop (awaiting video), severity 60-79, or debris → DOUBLE_YELLOW
+      - a STOP corroborated by video "blocked" (or otherwise cross-modal)
+        → SAFETY_CAR — corroboration IS the escalator, nothing else is
+      - a single-sensor stop, no video corroboration (yet) → DOUBLE_YELLOW
+        ("pending video confirmation") — this is where a working verifier earns its
+        keep: it's the ONLY thing that lifts a stop to a Safety Car
+      - severity 60-79, or debris                     → DOUBLE_YELLOW
       - severity 40-59                                → YELLOW at the turn
       - below that                                    → NONE (note / keep watching)
     """
@@ -251,7 +254,13 @@ def recommend_flag(incident: CorrelatedIncident) -> FlagRecommendation:
     video_blocked = incident.video_verdict == "blocked"
     confirmed_stop = stopped and (incident.corroborated or video_blocked)
 
-    if len(stopped_cars) >= 2 or confirmed_stop or prolonged or incident.severity >= 85:
+    # CORROBORATION IS THE ONLY ESCALATOR. A stop goes to Safety Car iff a second
+    # sense agrees it's a real track blockage (video "blocked", or cross-modal
+    # corroboration). A stop with no corroboration — even a prolonged one, even a
+    # multi-car one — falls through to DOUBLE_YELLOW ("pending video confirmation").
+    # This is the design fusion.py's docstring always claimed; the student's video
+    # verifier is what supplies that second sense, so THEIR code authorises the flag.
+    if confirmed_stop:
         return FlagRecommendation(
             flag=FlagType.SAFETY_CAR, turns=turns,
             rationale=_stopped_rationale(stopped_cars, incident, recovered_cars)

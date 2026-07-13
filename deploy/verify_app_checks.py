@@ -5,15 +5,15 @@ it only appears when the process is actually running AND can reach Firestore, so
 fresh heartbeat proves far more than "the Cloud Run resource exists". Same spirit
 as the data-layer's 'is it advancing?' check.
 
-Three checks, each pass/fail with a one-line fix on failure:
+The DEPLOYED tier is two agents (the correlator is NOT deployed — it runs locally,
+in a Cloud Shell tab, because it holds the file the student edits):
   1. Telemetry Observer running — agent_status/telemetry fresh and not offline.
-  2. Correlator + video verifier running — agent_status/correlator AND
-     agent_status/video both fresh.
-  3. Console serving — fe-console has a URL and it answers HTTP 200.
+  2. Console serving — fe-console has a URL and it answers HTTP 200.
 
-Heartbeats are polled briefly (cold-started containers take a few seconds to write
-their first one), so this is safe to run immediately after a deploy. Exit 0 only if
-all pass.
+The correlator + video verifier are reported as an INFORMATIONAL line only: if a
+heartbeat is present the student's local correlator is up; if not, that's expected
+(they simply haven't started `python -m correlator.service` yet), so it never fails
+the green light. Exit 0 iff the two DEPLOYED checks pass.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ PROJECT_ID = os.environ["GOOGLE_CLOUD_PROJECT"]
 CONSOLE_URL = os.environ.get("CONSOLE_URL", "").rstrip("/")
 FRESH_S = int(os.environ.get("FE_HEARTBEAT_FRESH_S", "30"))   # heartbeat interval is 5s
 
-OK, BAD = "  \033[92m✓\033[0m", "  \033[91m✗\033[0m"
+OK, BAD, INFO = "  \033[92m✓\033[0m", "  \033[91m✗\033[0m", "  \033[96mℹ\033[0m"
 
 
 def _fresh(doc: dict | None) -> bool:
@@ -73,35 +73,34 @@ def check_telemetry() -> bool:
         return True
     print(f"{BAD} Telemetry Observer heartbeat stale/missing.")
     if not _worker_pool_exists("fe-telemetry-observer"):
-        print("      Fix: bash deploy/deploy_telemetry_observer.sh")
+        print("      Fix: bash setup/7_deploy_telemetry_observer.sh")
     else:
         print("      Deployed but not heartbeating — check the logs:")
         print("           gcloud run worker-pools logs read fe-telemetry-observer --region $REGION")
     return False
 
 
-def check_correlator() -> bool:
-    corr = _get_fresh("correlator")
-    vid = _get_fresh("video")
-    corr_ok, vid_ok = _fresh(corr), _fresh(vid)
-    if corr_ok and vid_ok:
-        print(f"{OK} Correlator + video verifier online "
-              f"(correlator={corr.get('state')} {_age(corr)}s, video={vid.get('state')} {_age(vid)}s)")
-        return True
-    print(f"{BAD} Correlator heartbeat: correlator="
-          f"{'fresh' if corr_ok else 'stale/missing'}, video={'fresh' if vid_ok else 'stale/missing'}")
-    if not _worker_pool_exists("fe-correlator"):
-        print("      Fix: bash deploy/deploy_correlator.sh")
+def report_correlator() -> None:
+    """INFORMATIONAL only — the correlator runs LOCALLY, so its absence is normal.
+
+    This never fails the green light. It just tells the student whether their local
+    correlator (and the video verifier it arms) is currently heartbeating."""
+    corr = _get_fresh("correlator", tries=1)   # a single quick look — don't wait on a local process
+    vid = _get_fresh("video", tries=1)
+    if _fresh(corr):
+        v = f", video={vid.get('state')}" if _fresh(vid) else ", video not armed (running --no-verify?)"
+        print(f"{INFO} Correlator (local) is up (correlator={corr.get('state')} {_age(corr)}s{v})")
     else:
-        print("      Deployed but not (fully) heartbeating — check the logs:")
-        print("           gcloud run worker-pools logs read fe-correlator --region $REGION")
-    return False
+        print(f"{INFO} Correlator not running yet — that's expected; it runs LOCALLY.")
+        print("      Start it in a Cloud Shell tab (after `source activate.sh`):")
+        print("           python -m correlator.service --no-verify   # Task 0 (telemetry only)")
+        print("           python -m correlator.service               # Task 3 (with your verifier)")
 
 
 def check_console() -> bool:
     if not CONSOLE_URL:
         print(f"{BAD} Console: fe-console not deployed / URL not found.")
-        print("      Fix: bash deploy/deploy_console.sh")
+        print("      Fix: bash setup/8_deploy_console.sh")
         return False
     try:
         with urllib.request.urlopen(CONSOLE_URL, timeout=10) as r:
@@ -116,11 +115,13 @@ def check_console() -> bool:
 
 
 def main() -> int:
-    print("Checking the deployed application tier...\n")
-    results = [check_telemetry(), check_correlator(), check_console()]
+    print("Checking the deployed application tier (correlator runs locally)...\n")
+    results = [check_telemetry(), check_console()]   # the two DEPLOYED agents
+    report_correlator()                              # informational — never fails
     print()
     if all(results):
-        print("  \033[92mAll green — the agents are live. Open the console URL above.\033[0m")
+        print("  \033[92mAll green — the deployed agents are live. Open the console URL above,\033[0m")
+        print("  \033[92mthen start your correlator locally to fill the Race Control + Video columns.\033[0m")
         return 0
     print("  \033[91mSome checks failed — see the fixes above, then re-run "
           "bash deploy/verify_app.sh\033[0m")

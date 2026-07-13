@@ -13,5 +13,7 @@ requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["shared*", "observers*", "correlator*"]
+# starter*/solution* hold the student's Video Verifier as parallel packages; the
+# correlator loads one of them through shared/verifier_pkg.py (VERIFIER_PACKAGE).
+include = ["shared*", "observers*", "correlator*", "starter*", "solution*"]
 exclude = [".venv*", "scripts*", "deploy*", "setup*", "frontend*", "build*"]

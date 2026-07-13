@@ -1,8 +1,13 @@
 """VideoVerifier — telemetry-triggered, persistence-based video confirmation.
 
+*** SOLUTION — the complete reference answer key. ***
+This is the finished verifier the demo/instructor build runs. If you are a
+student, the file you edit is starter/video_verifier/verifier.py; open this one
+only when you're stuck (that's what it's for).
+
 When the telemetry observer flags a stopped car, the correlator asks this to
-confirm it against the CCTV. The design (validated in
-notebooks/verify_camera_mapping.ipynb against the real Berlin R10 footage):
+confirm it against the CCTV. The design (validated in notebooks/fe_video_lab.ipynb
+against the real Berlin R10 footage):
 
   1. Grounded + stateless. One bounded question over a short window, no rolling
      memory — so no self-reinforcing hallucination.
@@ -27,7 +32,7 @@ Verdict feeds the correlator's three-way fusion:
     unseen   -> telemetry-only (persistence path still escalates for blind spots)
 
 Run standalone (after `source activate.sh`):
-    python -m observers.video.verifier --at 693        # verify a race-second
+    python -m solution.video_verifier.verifier --at 693        # verify a race-second
 """
 from __future__ import annotations
 

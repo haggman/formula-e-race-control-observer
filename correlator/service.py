@@ -62,11 +62,10 @@ VERIFY_TAIL_S = 55.0
 VERIFY_MAX_ATTEMPTS = 3
 
 # The CCTV window the verifier will actually look at (mirrors the verifier's own
-# constants) — so we can TELL the operator which footage we're reviewing.
-try:
-    from observers.video.verifier import LEAD_S as VIDEO_LEAD_S, TAIL_S as VIDEO_TAIL_S
-except Exception:                        # verifier unavailable (telemetry-only mode)
-    VIDEO_LEAD_S, VIDEO_TAIL_S = 10, 50
+# constants) — so we can TELL the operator which footage we're reviewing. Resolved
+# through the starter/solution seam (VERIFIER_PACKAGE), not a hardcoded import.
+from shared.verifier_pkg import verifier_window
+VIDEO_LEAD_S, VIDEO_TAIL_S = verifier_window()
 
 # Flag severity ordering — used to decide what counts as an ESCALATION.
 _FLAG_RANK = {
@@ -403,12 +402,12 @@ def run(*, use_llm: bool = True, max_runtime_s: float | None = None,
     hb_video = None
     if verify:
         try:
-            from observers.video.verifier import VideoVerifier
-            svc.verifier = VideoVerifier()                  # reads gs:// slices on demand
+            from shared.verifier_pkg import get_verifier_class, VERIFIER_PACKAGE
+            svc.verifier = get_verifier_class()()           # reads gs:// slices on demand
             hb_video = Heartbeat("video", project=project)
             hb_video.set("online"); hb_video.start()        # no warm-up — ready immediately
-            logger.info("video verifier armed (%d groups; gs:// slices, no warm-up)",
-                        len(svc.verifier.groups))
+            logger.info("video verifier armed from %s (%d groups; gs:// slices, no warm-up)",
+                        VERIFIER_PACKAGE, len(svc.verifier.groups))
         except Exception as e:
             logger.warning("video verifier unavailable (%s) — telemetry-only", e)
             if hb_video:
