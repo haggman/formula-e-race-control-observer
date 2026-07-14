@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 480" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="980" height="480" rx="14" fill="#f7f9fc" stroke="#d8e0ea"/>
+  <text x="30" y="40" font-size="22" font-weight="700" fill="#1f2d3d">Two senses, one flag</text>
+  <text x="30" y="63" font-size="14" fill="#5b6b7d">A cheap detector decides WHEN to look; the model decides WHAT it sees.</text>
+
+  <defs>
+    <marker id="ar--" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#5b6b7d"/>
+    </marker>
+  </defs>
+
+  <!-- Simulator -->
+  <rect x="24" y="96" width="150" height="64" rx="10" fill="#eef2f7" stroke="#9fb0c3"/>
+  <text x="99" y="124" font-size="14" font-weight="600" fill="#1f2d3d" text-anchor="middle">Simulator</text>
+  <text x="99" y="143" font-size="11.5" fill="#5b6b7d" text-anchor="middle">race replays @ 1 Hz</text>
+
+  <!-- Mosaics -->
+  <rect x="24" y="300" width="150" height="64" rx="10" fill="#eef2f7" stroke="#9fb0c3"/>
+  <text x="99" y="328" font-size="14" font-weight="600" fill="#1f2d3d" text-anchor="middle">CCTV mosaics</text>
+  <text x="99" y="347" font-size="11.5" fill="#5b6b7d" text-anchor="middle">6 × 2×2 in a bucket</text>
+
+  <!-- Telemetry Observer -->
+  <rect x="250" y="86" width="200" height="84" rx="10" fill="#eef2f7" stroke="#9fb0c3"/>
+  <text x="350" y="114" font-size="14.5" font-weight="700" fill="#1f2d3d" text-anchor="middle">Telemetry Observer</text>
+  <text x="350" y="134" font-size="11" fill="#5b6b7d" text-anchor="middle">the deterministic WHEN</text>
+  <text x="350" y="151" font-size="11" fill="#5b6b7d" text-anchor="middle">"car 7 stopped on track"</text>
+  <text x="350" y="79" font-size="11" fill="#8a97a6" text-anchor="middle">GIVEN</text>
+
+  <!-- Video Verifier (student) -->
+  <rect x="250" y="286" width="200" height="94" rx="10" fill="#fff4d6" stroke="#e0a500" stroke-width="2"/>
+  <text x="350" y="313" font-size="14.5" font-weight="700" fill="#6b4e00" text-anchor="middle">Video Verifier</text>
+  <text x="350" y="333" font-size="11" fill="#7a5c00" text-anchor="middle">Gemini reads a gs:// slice</text>
+  <text x="350" y="350" font-size="11" fill="#7a5c00" text-anchor="middle">the WHAT — "still blocked?"</text>
+  <rect x="300" y="360" width="100" height="18" rx="9" fill="#e0a500"/>
+  <text x="350" y="373" font-size="11" font-weight="700" fill="#fff" text-anchor="middle">YOU BUILD THIS</text>
+
+  <!-- Correlator -->
+  <rect x="536" y="176" width="196" height="118" rx="10" fill="#e7effa" stroke="#4a78c8" stroke-width="1.5"/>
+  <text x="634" y="206" font-size="14.5" font-weight="700" fill="#1f2d3d" text-anchor="middle">Correlator</text>
+  <text x="634" y="226" font-size="11.5" fill="#41597a" text-anchor="middle">fuse the two senses</text>
+  <text x="634" y="244" font-size="11.5" fill="#41597a" text-anchor="middle">flag policy (deterministic)</text>
+  <text x="634" y="262" font-size="11.5" fill="#41597a" text-anchor="middle">draft the report</text>
+  <text x="634" y="283" font-size="11" fill="#8a97a6" text-anchor="middle">GIVEN — runs locally</text>
+
+  <!-- Console -->
+  <rect x="806" y="188" width="150" height="94" rx="10" fill="#e9f7ee" stroke="#3fa564" stroke-width="1.5"/>
+  <text x="881" y="221" font-size="14.5" font-weight="700" fill="#1f2d3d" text-anchor="middle">Race Control</text>
+  <text x="881" y="240" font-size="11.5" fill="#2f7a4c" text-anchor="middle">one-click approve</text>
+  <text x="881" y="264" font-size="11.5" fill="#2f7a4c" text-anchor="middle">the pit wall</text>
+
+  <!-- arrows -->
+  <line x1="174" y1="128" x2="246" y2="128" stroke="#5b6b7d" stroke-width="1.6" marker-end="url(#ar--)"/>
+  <text x="210" y="120" font-size="10.5" fill="#5b6b7d" text-anchor="middle">telemetry</text>
+
+  <line x1="174" y1="332" x2="246" y2="332" stroke="#5b6b7d" stroke-width="1.6" marker-end="url(#ar--)"/>
+  <text x="210" y="324" font-size="10.5" fill="#5b6b7d" text-anchor="middle">gs:// slice</text>
+
+  <line x1="450" y1="132" x2="532" y2="205" stroke="#5b6b7d" stroke-width="1.6" marker-end="url(#ar--)"/>
+  <text x="500" y="158" font-size="10.5" fill="#5b6b7d" text-anchor="middle">stop</text>
+
+  <line x1="450" y1="326" x2="532" y2="262" stroke="#e0a500" stroke-width="2" marker-end="url(#ar--)"/>
+  <text x="497" y="316" font-size="10.5" fill="#a87c00" text-anchor="middle">verdict</text>
+
+  <line x1="732" y1="234" x2="802" y2="234" stroke="#5b6b7d" stroke-width="1.6" marker-end="url(#ar--)"/>
+  <text x="767" y="226" font-size="10.5" fill="#5b6b7d" text-anchor="middle">flag</text>
+
+  <!-- footnote -->
+  <text x="30" y="440" font-size="12.5" fill="#1f2d3d"><tspan font-weight="700">The gap you close:</tspan> until your verdict arrives, a stop is only a "double yellow — pending video confirmation."</text>
+  <text x="30" y="460" font-size="12.5" fill="#1f2d3d">Your <tspan font-weight="700" fill="#a87c00">blocked</tspan> verdict is the only thing that escalates it to a corroborated Safety Car.</text>
+</svg>

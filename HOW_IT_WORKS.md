@@ -22,19 +22,21 @@ it with one click. **The human decides. The system prepares the decision.**
 
 Here is the entire problem, in one fact:
 
-> **A car stopped in the pit lane and a car stopped in the middle of Turn 3 look
-> identical in telemetry.** Speed is zero in both.
+> **Telemetry can see that a car has stopped. It cannot see WHY, or whether it lasts.**
 
-If you throw a Safety Car for every stationary car, you'll red-face yourself every
-time someone pits. If you ignore them, you'll leave a stranded car in a blind corner
-at 200 km/h closing speed. Telemetry alone cannot tell you which one you're looking
-at with confidence.
+Telemetry isn't naive about the pit lane — it knows the car's GPS, so a car sitting in its
+pit box is flagged as a routine pit stop and dismissed. The hard case is a car that stops
+*out on the track*. Speed is zero, but is it a retirement that's blocking the racing line,
+or a spin the driver will gather up and drive out of? Is it in a dangerous spot, or safely
+in a run-off? Is it *still* there a minute later? Telemetry can't answer any of that with
+confidence.
 
-So telemetry raises its hand — *"car #7 has been stationary for 18 seconds"* — and
-the cameras answer the question telemetry can't: **is the racing line actually
+So telemetry raises its hand — *"car #7 has been stationary for 18 seconds"* — and the
+cameras answer the question telemetry can't: **is the racing line actually, still
 blocked?**
 
-That's the whole architecture. Two senses, because one is ambiguous.
+That's the whole architecture. Two senses, because a stopped car on track is ambiguous
+until someone looks.
 
 ---
 

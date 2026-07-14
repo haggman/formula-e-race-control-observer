@@ -66,9 +66,10 @@ answer key is `solution/video_verifier/verifier.py`.
                                      bounded window)         to Firestore
 ```
 
-Two senses, because one is ambiguous: a car stopped in the pit lane and a car stopped in
-a blind corner look **identical in telemetry**. Telemetry raises its hand; the camera
-answers *is the racing line actually blocked?* The flag policy is deterministic code
+Two senses, because one is ambiguous: telemetry can see a car stop and even tell a pit
+stop apart by its GPS, but it can't judge whether a car stopped **out on the track** is a
+real, lasting blockage. Telemetry raises its hand; the camera answers *is the racing line
+actually blocked?* The flag policy is deterministic code
 (`correlator/fusion.py`), not a model call — a safety decision must be explainable and
 repeatable.
 
@@ -87,10 +88,10 @@ repeatable.
 ## Race context
 
 The data is the real **Berlin R10** telemetry (`simulator/src/frames.jsonl.gz`, 1 Hz).
-The demo incidents are real: **Günther #7** retires on track at race-second 693;
-**Fenestraz #23 + Nato #17** stop together at 1692 (Nato recovers, Fenestraz stays);
-**Mortara #48** stops at 1780; **Ticktum #33** makes a routine pit stop at 94 (correctly
-*not* flagged). Green flag = 13:04:00 UTC.
+The demo incidents — the console's jump buttons — are real: **Günther #7** retires on
+track; **Fenestraz #23 + Nato #17** stop together (Nato recovers, Fenestraz stays);
+**Mortara #48** stops then recovers while #23 is still stranded; **Ticktum #33** makes a
+routine pit stop (correctly *not* flagged).
 
 ## License
 

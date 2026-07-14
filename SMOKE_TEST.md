@@ -66,13 +66,14 @@ NOT a Safety Car — only corroboration escalates.
 
 ```bash
 python -m correlator.service --no-verify &     # telemetry only
-# open the console URL; jump to race-second 693
+# open the console URL, then click the Günther jump button
 ```
 
 **PASS:** the Race Control column shows **DOUBLE YELLOW** for Günther and the Video Agent
-column is empty (verifier off). Jump to 94 → **no flag**, "routine pit stop."
-Then stop it, run `VERIFIER_PACKAGE=solution.video_verifier python -m correlator.service`,
-jump to 693 again → the Video Agent narrates and Race Control escalates to **SAFETY CAR ·
+column is empty (verifier off). Click **#33 (pit — no flag)** → the board stays green,
+"routine pit stop." Then stop it, run
+`VERIFIER_PACKAGE=solution.video_verifier python -m correlator.service`, and click
+**Günther** again → the Video Agent narrates and Race Control escalates to **SAFETY CAR ·
 corroborated**.
 **FAIL:** the Race Control or Video column stays blank while the logs claim a verdict —
 that's a dead publisher; restart and check the `fe-incidents` / `fe-observations`
