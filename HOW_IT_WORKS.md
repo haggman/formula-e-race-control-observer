@@ -16,6 +16,8 @@ A **Correlator** fuses the two into a single recommendation — *double yellow*,
 *safety car*, or *nothing* — and puts it in front of a human official who approves
 it with one click. **The human decides. The system prepares the decision.**
 
+![Architecture — two senses, one flag](docs/architecture.svg)
+
 ---
 
 ## Why one sense isn't enough

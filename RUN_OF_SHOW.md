@@ -28,7 +28,6 @@ You demo the **solution**, which is fast (its sweep is concurrent). From a fresh
 Cloud Shell:
 
 ```bash
-gcloud config set project YOUR_PROJECT_ID                 # the new project you created
 git clone https://github.com/haggman/formula-e-race-control-observer.git
 cd formula-e-race-control-observer
 source activate.sh
