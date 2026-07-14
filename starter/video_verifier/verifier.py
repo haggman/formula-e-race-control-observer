@@ -112,44 +112,42 @@ class VideoVerdict:
 
 
 # ---------------------------------------------------------------------------
-# Prompt  — TASK 2: THE HEART OF THE HACK. Write this.
+# Prompt  — TASK 3: paste the _prompt you built in the notebook (Task 2) here.
 # ---------------------------------------------------------------------------
 def _prompt(cams: list[str], t: int, start: int, end: int, cars=None) -> str:
-    """Return the text prompt for ONE 2x2 mosaic clip. THIS IS TASK 2 — write it.
+    """Build the text prompt for ONE 2x2 mosaic clip.
 
-    What the question must achieve (this is the whole lesson):
-      * Judge the TRACK STATE by the END of the window, not presence at a moment.
-        A car can be stopped at second 5 and gone by second 50. Asking "is there a
-        stopped car?" cannot tell a retirement from a spin-and-recover; asking "by
-        the END of this clip, is the racing line still BLOCKED, or did it CLEAR?"
-        can. Get that framing right and one answer does all the work.
-      * Ask about the TRACK, not the car's identity — the safety call is "is the
-        line blocked", not "which car is it". (Naming the car is Bonus 2.)
-      * The clip is a 2x2 mosaic of four cameras. The panels map, in order, to:
-            TL={cams[0]}  TR={cams[1]}  BL={cams[2]}  BR={cams[3]}
-        Ask the model which PANEL it saw the incident in; the code maps panel ->
-        camera for you (see _verify_group).
-
-    Return EXACTLY this JSON shape (the rest of the file depends on these keys):
-        {
-          "blockage":     bool,                 # line still blocked at the end?
-          "cleared":      bool,                 # car recovered / line clear by the end?
-          "panel":        "TL|TR|BL|BR|none",   # which mosaic panel it was in
-          "feed_live":    bool,                 # are other cars still moving?
-          "seen_car":     <int or null>,        # only if a number is clearly legible
-          "what_you_see": str,                  # one-line human description
-          "confidence":   number                # 0..1
-        }
-
-    `cars` and the module-level LIVERIES table are available for Bonus 2 (a livery
-    hint) — the core prompt does not need them.
+    You wrote and tuned this in the notebook (Task 2); Task 3 is to drop it in. This
+    function has the SAME signature and the SAME given `context`/`json_contract` tail
+    as the notebook cell, so you can paste your notebook `_prompt` straight over this
+    one — or just paste your `logic`. `cams`, `t`, `start`, `end`, `cars` are the same
+    variables you had in the notebook.
     """
-    raise NotImplementedError(
-        "TASK 2: write the persistence / track-state prompt. It must decide whether "
-        "the racing line is still BLOCKED by the END of the [start,end] window, and "
-        "return the JSON object documented in this docstring. See STUDENT_GUIDE.md "
-        "Task 2, and iterate on it in notebooks/fe_video_lab.ipynb first."
-    )
+    tl, tr, bl, br = (cams + ["?", "?", "?", "?"])[:4]
+
+    # ===== YOUR LOGIC (from Task 2) — the question + how to BRIDGE what Gemini sees =====
+    #   when is blockage true vs cleared?  -> judge the END of the window
+    #   which panel (TL/TR/BL/BR) is it in? -> panel     (code maps panel -> camera)
+    #   the car's number if legible, else null -> seen_car
+    #   a one-line description -> what_you_see ; other cars moving -> feed_live ; confidence
+    #   (`cars` + the module-level LIVERIES table are Bonus 2 — naming the car.)
+    logic = """
+    << paste the question you built in the notebook here >>
+    """
+
+    # ===== GIVEN — clip context + the JSON contract the code depends on (don't change) =
+    context = (f"This is a ~{end - start}s CCTV clip — a 2x2 mosaic of four cameras: "
+               f"TL={tl}, TR={tr}, BL={bl}, BR={br}.")
+    json_contract = ('Respond with a SINGLE JSON object: {"blockage": bool, "cleared": bool, '
+                     '"panel": "TL|TR|BL|BR|none", "feed_live": bool, '
+                     '"seen_car": <car number if clearly readable, else null>, '
+                     '"what_you_see": string, "confidence": number}')
+
+    if "<<" in logic:
+        raise NotImplementedError(
+            "TASK 3: paste the `_prompt` (or its `logic`) you built in "
+            "notebooks/fe_video_lab.ipynb (Task 2) into `logic` above. See STUDENT_GUIDE.md Task 3.")
+    return f"{logic}\n{context}\n{json_contract}"
 
 
 def _parse(text: str) -> dict:

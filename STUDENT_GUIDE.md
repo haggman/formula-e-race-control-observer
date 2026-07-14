@@ -158,9 +158,11 @@ stop. That's the magic moment: a model reading a slice of a video straight from 
 Spend your time here. This is the best discussion of the day, and it's the part you
 actually invent.
 
-**Open:** section 5 of the notebook — the prompt workbench. It hands you a blank
-`PROMPT = "Your prompt here…"` and a cell that runs *your* prompt against the one camera
-where we know the Günther stop is visible.
+**Open:** section 5 of the notebook — the prompt workbench. It hands you a `_prompt(cams,
+t, start, end, cars)` function with the JSON contract already filled in and a blank `logic`
+for you to write, plus a one-cell loop that runs it against the single camera where the
+Günther stop is visible. (That `_prompt` is the exact function you'll paste into
+`verifier.py` in Task 3.)
 
 **Your challenge:** write the question so that **one** answer separates a real retirement
 from a spin-and-recover. The naive prompt — *"is there a stopped car?"* — can't: a car can
@@ -194,9 +196,10 @@ single camera and across the sweep.
 
 **Open:** `starter/video_verifier/verifier.py`. Three methods are stubbed:
 
-- `_prompt(...)` — the question + JSON contract you just tuned in the notebook.
+- `_prompt(...)` — **paste your notebook `_prompt` straight over the stub** (same
+  arguments, same given JSON tail), or just drop in your `logic`.
 - `VideoVerifier._verify_group(...)` — one Gemini call over one `gs://` slice → parsed
-  dict (the file docstring names the exact API surface).
+  dict (the file docstring names the exact API surface; it's the notebook's `_call`).
 - `VideoVerifier._aggregate(...)` — fuse the six replies into one `VideoVerdict`. Core is
   `blocked` vs `unseen`; the honest `cleared` and `error` states are Bonuses 4 & 5.
 
