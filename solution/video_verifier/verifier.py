@@ -1,108 +1,24 @@
-"""VideoVerifier — telemetry-triggered, persistence-based video confirmation.
+"""VideoVerifier — REFERENCE (the answer key).
 
-*** SOLUTION — the complete reference answer key. ***
-This is the finished verifier the demo/instructor build runs. If you are a
-student, the file you edit is starter/video_verifier/verifier.py; open this one
-only when you're stuck (that's what it's for).
+Same file, same layout as starter/video_verifier/verifier.py, finished. The plumbing
+both packages share lives next door in `_given.py`.
 
-When the telemetry observer flags a stopped car, the correlator asks this to
-confirm it against the CCTV. The design (validated in notebooks/fe_video_lab.ipynb
-against the real Berlin R10 footage):
-
-  1. Grounded + stateless. One bounded question over a short window, no rolling
-     memory — so no self-reinforcing hallucination.
-  2. Persistence, not presence. "By the END of the window, is the racing line
-     still BLOCKED, or did the car clear/drive away?" — cleanly separates a real
-     retirement (Günther/Fenestraz stay blocked) from a spin-and-recover (Evans).
-  3. Track state, not car identity. The model can't reliably read a car number off
-     distant CCTV, so we ask only about the track; the correlator owns the number.
-  4. Sweep all groups CONCURRENTLY (asyncio.gather → ~one call of latency) and take
-     the strongest blockage — our GPS→camera map proved unreliable.
-
-VIDEO-DIRECT: rather than download mosaics and extract frames, we point Gemini
-straight at each mosaic in the bucket and pass videoMetadata start/end offsets, so
-it decodes ONLY the window. No download, no ffmpeg, no warm-up, no local disk. The
-mosaics are 1 FPS from race-second 0, so the mp4 offset in seconds == race_time_s
-(validated against the burned-in clock). We read from the project's own regional
-bucket, so Vertex reads are same-region (free).
-
-Verdict feeds the correlator's three-way fusion:
-    blocked  -> corroborated -> SAFETY_CAR
-    cleared  -> veto         -> no Safety Car (car recovered)
-    unseen   -> telemetry-only (persistence path still escalates for blind spots)
-
-Run standalone (after `source activate.sh`):
-    python -m solution.video_verifier.verifier --at 693        # verify a race-second
+Differences from the starter, all deliberate:
+  * `_prompt`   is written.
+  * `_sweep`    is CONCURRENT (the starter's is sequential — that's Bonus 1).
+  * `_aggregate` honours all four states, including the `cleared` veto and honest `error`.
 """
 from __future__ import annotations
 
-import argparse
 import asyncio
-import json
-import logging
-import os
-import sys
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logging.getLogger("google_genai.models").setLevel(logging.WARNING)
-logger = logging.getLogger("video.verifier")
-
-DEFAULT_MODEL = "gemini-3.5-flash"
-LEAD_S = 10          # seconds of context before the flagged stop
-TAIL_S = 50          # seconds after — long enough for a recovering car to clear
-
-_PANEL_POS = ["TL", "TR", "BL", "BR"]
-
-# 2024 Formula E (Berlin R10) liveries, by car number — a hint so the verifier can
-# cross-check the stopped car against the telemetry car by colour AND number.
-LIVERIES = {
-    1:  "Andretti — white, red and blue",   17: "Andretti — white, red and blue",
-    2:  "DS Penske — gold on black",         25: "DS Penske — gold on black",
-    3:  "ERT",                               33: "ERT",
-    4:  "Envision — green",                  16: "Envision — green",
-    5:  "McLaren — papaya orange and black", 8:  "McLaren — papaya orange and black",
-    7:  "Maserati — dark blue with an orange rear flash",
-    18: "Maserati — dark blue with an orange rear flash",
-    9:  "Jaguar — black and white",          37: "Jaguar — black and white",
-    11: "ABT Cupra — copper and black",      51: "ABT Cupra — copper and black",
-    13: "Porsche — white and black with red", 94: "Porsche — white and black with red",
-    21: "Mahindra — matt red and silver",    48: "Mahindra — matt red and silver",
-    22: "Nissan — red, white and black",     23: "Nissan — red, white and black",
-}
+from ._given import (
+    LEAD_S, TAIL_S, LIVERIES, PANEL_POS,
+    VideoVerdict, VerifierBase,
+    _parse, _short_error, logger, run_cli,
+)
 
 
-# ---------------------------------------------------------------------------
-# Verdict
-# ---------------------------------------------------------------------------
-@dataclass
-class VideoVerdict:
-    """The verifier's read of the track around a telemetry-flagged stop."""
-    state: str                       # "blocked" | "cleared" | "unseen"
-    cameras: list[str] = field(default_factory=list)   # cameras showing the blockage
-    description: str = ""
-    confidence: float = 0.0
-    per_group: dict = field(default_factory=dict)      # raw per-group replies
-    identified: Optional[int] = None                   # car number the model actually read (else None)
-    error: Optional[str] = None                        # set when the check couldn't RUN (vs. ran and saw nothing)
-
-    @property
-    def blocked(self) -> bool:
-        return self.state == "blocked"
-
-    @property
-    def cleared(self) -> bool:
-        return self.state == "cleared"
-
-
-# ---------------------------------------------------------------------------
-# Prompt (persistence / track-state — the notebook-validated form)
-# ---------------------------------------------------------------------------
 def _prompt(cams: list[str], t: int, start: int, end: int, cars=None) -> str:
     tl, tr, bl, br = (cams + ["?", "?", "?", "?"])[:4]
     hint = ""
@@ -133,106 +49,43 @@ def _prompt(cams: list[str], t: int, start: int, end: int, cars=None) -> str:
     )
 
 
-def _parse(text: str) -> dict:
-    s = (text or "").strip()
-    a, b = s.find("{"), s.rfind("}")
-    if a != -1 and b > a:
-        try:
-            return json.loads(s[a:b + 1])
-        except json.JSONDecodeError:
-            pass
-    return {}
+class VideoVerifier(VerifierBase):
+    """Stateless, persistence-based CCTV confirmation of a telemetry stop."""
 
-
-def _short_error(exc: Exception) -> str:
-    """A one-line, human-friendly reason a group verify failed."""
-    s = str(exc)
-    up = s.upper()
-    if "BEING PROVISIONED" in up or "TRY AGAIN" in up:
-        return "Vertex AI service agent still provisioning — will retry"
-    if "PERMISSION" in up or "403" in up or "FORBIDDEN" in up:
-        return "permission denied reading the mosaics (check the Vertex service agent's storage access)"
-    if "NOT FOUND" in up or "404" in up or "NO SUCH" in up:
-        return "mosaic file not found (is the bucket staged?)"
-    return (s[:140] + "…") if len(s) > 141 else s
-
-
-# ---------------------------------------------------------------------------
-# Verifier
-# ---------------------------------------------------------------------------
-class VideoVerifier:
-    """Stateless, parallel, persistence-based CCTV confirmation of a telemetry stop.
-
-    Reads each mosaic's window straight from the bucket (gs:// + videoMetadata
-    offsets) — no download, no extraction, no warm-up.
-    """
-
-    def __init__(self, *, bucket: Optional[str] = None, base: Optional[str] = None,
-                 model: Optional[str] = None, groups: Optional[list[str]] = None):
-        self.base = (base or os.environ.get("FE_MOSAICS_BASE")
-                     or f"gs://{bucket or os.environ.get('MOSAICS_BUCKET')}/mosaics")
-        self.model = model or os.environ.get("FE_VIDEO_MODEL") or DEFAULT_MODEL
-        self._client = None
-        self.groups = groups or self._list_groups()
-
-    # -- setup ---------------------------------------------------------------
-    def _list_groups(self) -> list[str]:
-        """List the mosaic group_ids in the bucket (each is <group_id>.mp4)."""
-        from google.cloud import storage
-        rest = self.base[len("gs://"):]
-        bkt, _, prefix = rest.partition("/")
-        client = storage.Client()
-        out = []
-        for blob in client.list_blobs(bkt, prefix=(prefix + "/") if prefix else None):
-            name = os.path.basename(blob.name)
-            if name.endswith(".mp4"):
-                out.append(name[:-4])
-        if not out:
-            raise RuntimeError(f"no mosaics found under {self.base}")
-        return sorted(out)
-
-    def _ensure_client(self):
-        if self._client is None:
-            from shared.gemini import make_client
-            self._client = make_client()
-        return self._client
-
-    def _uri(self, group_id: str) -> str:
-        return f"{self.base}/{group_id}.mp4"
-
-    @staticmethod
-    def _cams(group_id: str) -> list[str]:
-        """Panel cameras from the group_id (…_cam01_cam02_cam03_cam04 → Cam01…Cam04)."""
-        return [p.title() for p in group_id.split("_") if p.lower().startswith("cam")]
-
-    # -- one group -----------------------------------------------------------
-    async def _verify_group(self, group_id: str, t: int, lead: int, tail: int, cars=None) -> dict:
+    async def _verify_group(self, group_id: str, t: int, lead: int, tail: int,
+                            cars=None) -> dict:
         from google.genai import types
         from shared.gemini import aretry_call
+
         start, end = max(0, t - lead), t + tail
         cams = self._cams(group_id)
         vpart = types.Part(
             file_data=types.FileData(file_uri=self._uri(group_id), mime_type="video/mp4"),
-            video_metadata=types.VideoMetadata(start_offset=f"{start}s", end_offset=f"{end}s"))
+            video_metadata=types.VideoMetadata(start_offset=f"{start}s",
+                                               end_offset=f"{end}s"))
         resp = await aretry_call(lambda: self._client.aio.models.generate_content(
             model=self.model,
             contents=[types.Content(role="user",
-                                    parts=[vpart, types.Part(text=_prompt(cams, t, start, end, cars))])],
+                                    parts=[vpart,
+                                           types.Part(text=_prompt(cams, t, start, end, cars))])],
             config=types.GenerateContentConfig(temperature=0.2,
                                                response_mime_type="application/json"),
         ), what="verify")
+
         d = _parse(resp.text)
         d["group"] = group_id
         panel = str(d.get("panel", "none"))
-        if panel in _PANEL_POS and _PANEL_POS.index(panel) < len(cams):
-            d["camera"] = cams[_PANEL_POS.index(panel)]
+        if panel in PANEL_POS and PANEL_POS.index(panel) < len(cams):
+            d["camera"] = cams[PANEL_POS.index(panel)]
         return d
 
-    # -- sweep + aggregate ---------------------------------------------------
     async def _sweep(self, t: int, lead: int, tail: int, cars):
-        """One concurrent all-groups sweep at race-second t.
-        Returns (per_group_replies, errors) — errors let the caller tell a real
-        'saw nothing' from a check that never RAN (auth/provisioning/network)."""
+        """One CONCURRENT all-groups sweep at race-second t  (the starter's is a
+        sequential for-loop — making it concurrent is Bonus 1).
+
+        Returns (per_group_replies, errors); `errors` lets the caller tell a real
+        'saw nothing' from a check that never RAN (auth / provisioning / network).
+        """
         results = await asyncio.gather(
             *[self._verify_group(g, t, lead, tail, cars) for g in self.groups],
             return_exceptions=True)
@@ -244,13 +97,6 @@ class VideoVerifier:
                 continue
             per_group[r["group"]] = r
         return per_group, errors
-
-    @staticmethod
-    def _seen_car(r: dict):
-        try:
-            return int(str(r.get("seen_car")).lstrip("#"))
-        except (TypeError, ValueError):
-            return None
 
     @staticmethod
     def _aggregate(per_group: dict, errors: list | None = None) -> VideoVerdict:
@@ -271,61 +117,16 @@ class VideoVerifier:
                                 confidence=float(best.get("confidence", 0) or 0),
                                 per_group=per_group,
                                 identified=VideoVerifier._seen_car(best))
-        # Nothing blocked/cleared. If NO group even ran (all errored), that's an
-        # outage, not a clean "no view" — surface it so the console can say so.
+        # Nothing blocked or cleared. If NO group even ran, that's an outage, not a
+        # clean "no view" — surface it so the console can say so.
         if not per_group and errors:
             return VideoVerdict(state="error", per_group=per_group,
                                 description=errors[0], error=errors[0])
         return VideoVerdict(state="unseen", per_group=per_group)
 
-    async def verify(self, race_time_s: int, *, cars=None,
-                     lead: int = LEAD_S, tail: int = TAIL_S) -> VideoVerdict:
-        """Sweep every camera group CONCURRENTLY; return the aggregated verdict.
-
-        `cars` = the telemetry car number(s), used as a livery/number hint so the
-        description can cross-check identity (not the safety verdict). Whether a
-        blockage later CLEARS is handled by the telemetry RECOVERED signal (cheap +
-        deterministic), not by re-querying video."""
-        self._ensure_client()
-        t = int(race_time_s)
-        per_group, errors = await self._sweep(t, lead, tail, cars)
-        return self._aggregate(per_group, errors)
-
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="One-shot CCTV verification of a telemetry stop")
-    ap.add_argument("--at", type=int, required=True, help="race-second the stop was flagged")
-    ap.add_argument("--bucket", default=None, help="mosaics bucket (default $MOSAICS_BUCKET)")
-    ap.add_argument("--base", default=None, help="full gs:// mosaics base (overrides --bucket)")
-    ap.add_argument("--lead", type=int, default=LEAD_S)
-    ap.add_argument("--tail", type=int, default=TAIL_S)
-    ap.add_argument("--model", default=None)
-    ap.add_argument("--cars", default=None,
-                    help="comma-separated car number(s) for the livery hint, e.g. 7 or 48,7")
-    ap.add_argument("--out", default=None,
-                    help="append the verdict (JSON line) to this file, e.g. ~/fe_verifier_results.jsonl")
-    args = ap.parse_args()
-
-    cars = [int(c) for c in args.cars.split(",")] if args.cars else None
-    v = VideoVerifier(bucket=args.bucket, base=args.base, model=args.model)
-    verdict = asyncio.run(v.verify(args.at, cars=cars, lead=args.lead, tail=args.tail))
-    print(f"\nVERDICT: {verdict.state.upper()}"
-          + (f"  cameras={verdict.cameras}  conf={verdict.confidence}" if verdict.blocked else "")
-          + (f"  conf={verdict.confidence}" if verdict.cleared else ""))
-    if verdict.description:
-        print(f"  {verdict.description}")
-
-    if args.out:
-        out = os.path.expanduser(args.out)
-        os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
-        rec = {"run_utc": datetime.now(timezone.utc).isoformat(), "at": args.at,
-               "state": verdict.state, "cameras": verdict.cameras,
-               "confidence": verdict.confidence, "description": verdict.description,
-               "per_group": verdict.per_group}
-        with open(out, "a") as fh:
-            fh.write(json.dumps(rec) + "\n")
-        print(f"  (appended to {out})")
-    return 0
+    return run_cli(VideoVerifier)
 
 
 if __name__ == "__main__":
